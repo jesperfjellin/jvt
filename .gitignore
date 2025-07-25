@@ -3,3 +3,18 @@
 .history
 .env
 *.env
+.cursor/
+docs/
+
+# Docker volumes and cache
+cache/
+logs/
+init-scripts/*.log
+
+# Temporary files
+dirty_tiles*.txt
+*.tmp
+
+# Build artifacts
+target/
+Cargo.lock

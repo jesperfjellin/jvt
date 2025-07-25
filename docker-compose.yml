@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: jvt-postgres
+    environment:
+      POSTGRES_DB: gis
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=C"
+    volumes:
+      # Database data on C drive (will grow to ~1TB) - clean Docker volume
+      - postgres_data:/var/lib/postgresql/data
+      # Init scripts for database setup
+      - ./init-scripts:/docker-entrypoint-initdb.d
+      # Map your planet file on C drive for import
+      - /mnt/c/_data/GIS/osm:/data/osm:ro
+    ports:
+      - "5432:5432"
+    command: >
+      postgres 
+      -c shared_buffers=2GB
+      -c effective_cache_size=8GB
+      -c maintenance_work_mem=1GB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=64MB
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d gis"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  jvt-worker:
+    build: .
+    container_name: jvt-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/gis
+      RUST_LOG: ${RUST_LOG:-info}
+      DIRTY_TILES_PATH: /var/cache/renderd
+      PMTILES_ARCHIVE_PATH: /var/lib/pmtiles/planet.pmtiles
+    volumes:
+      # Tile processing cache (fast access needed)
+      - ./cache/renderd:/var/cache/renderd
+      # PMTiles archive on C drive (will grow large over time)  
+      - pmtiles_data:/var/lib/pmtiles
+      # Logs on local drive for easy access
+      - ./logs:/var/log/tiles
+      # Map your planet file on C drive for import
+      - /mnt/c/_data/GIS/osm:/data/osm:ro
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  pmtiles_data:
+
+networks:
+  default:
+    name: jvt-network 
