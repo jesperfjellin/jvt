@@ -54,6 +54,20 @@ services:
       - /mnt/c/_data/GIS/osm:/data/osm:ro
     restart: unless-stopped
 
+  frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: jvt-frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   pmtiles_data:

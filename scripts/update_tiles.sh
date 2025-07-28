@@ -8,7 +8,7 @@ set -euo pipefail
 DATABASE_URL="${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/gis}"
 DIRTY_TILES_DIR="${DIRTY_TILES_PATH:-/var/cache/renderd}"
 MAX_DIFF_SIZE="${MAX_DIFF_SIZE_MB:-50}"
-EXPIRE_TILES_ZOOM="${EXPIRE_TILES_ZOOM:-0-14}"
+EXPIRE_TILES_ZOOM="${EXPIRE_TILES_ZOOM:-1-14}"
 
 # Create timestamp for this run
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
@@ -20,21 +20,19 @@ mkdir -p "$DIRTY_TILES_DIR"
 echo "$(date): Starting OSM2PGSQL replication update..."
 
 # Run osm2pgsql-replication update with expire output
-# This follows the exact pattern from docs/OSM2PGSQL.txt
+# Uses the replication service stored during import (Norway-specific)
 osm2pgsql-replication update \
   --database="${DATABASE_URL}" \
   --max-diff-size="${MAX_DIFF_SIZE}" \
-  --expire-tiles="${EXPIRE_TILES_ZOOM}" \
-  --expire-output="${DIRTY_TILES_FILE}" \
   -- \
   --slim \
-  --drop \
   --cache=4000 \
   --number-processes=4 \
   --hstore \
   --multi-geometry \
   --keep-coastlines \
-  --database="${DATABASE_URL#postgresql://*/}"
+  --expire-tiles="${EXPIRE_TILES_ZOOM}" \
+  --expire-output="${DIRTY_TILES_FILE}"
 
 # Check if dirty tiles file was created and has content
 if [ -f "$DIRTY_TILES_FILE" ] && [ -s "$DIRTY_TILES_FILE" ]; then

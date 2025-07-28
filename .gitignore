@@ -18,3 +18,8 @@ dirty_tiles*.txt
 # Build artifacts
 target/
 Cargo.lock
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
