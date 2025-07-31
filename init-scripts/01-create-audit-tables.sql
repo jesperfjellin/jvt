@@ -22,6 +22,22 @@ CREATE TABLE IF NOT EXISTS changed_tile_batches (
 CREATE INDEX IF NOT EXISTS idx_changed_tile_batches_started_at 
 ON changed_tile_batches(started_at);
 
+-- Create tile freshness tracking table for JVT demo
+CREATE TABLE IF NOT EXISTS tile_freshness (
+    z INTEGER,
+    x INTEGER, 
+    y INTEGER,
+    last_updated TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (z, x, y)
+);
+
+-- Index for efficient tile freshness queries
+CREATE INDEX IF NOT EXISTS idx_tile_freshness_updated 
+ON tile_freshness(last_updated);
+
+CREATE INDEX IF NOT EXISTS idx_tile_freshness_zoom 
+ON tile_freshness(z);
+
 -- Create notification channel for tile updates
 -- (The Rust worker will listen on this channel)
 -- Note: LISTEN/NOTIFY channels are created automatically when first used

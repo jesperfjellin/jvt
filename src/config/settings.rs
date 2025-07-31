@@ -45,8 +45,8 @@ impl Default for Config {
                 notification_channel: "tiles_updated".to_string(),
             },
             tiles: TileConfig {
-                max_zoom: 14,
-                min_zoom: 0,
+                max_zoom: 8,  // MVP: Start with just zoom level 8
+                min_zoom: 8,  // MVP: Only generate z8 tiles
                 tile_size: 4096,
                 buffer: 256,
             },
@@ -93,7 +93,8 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.tiles.max_zoom, 14);
+        assert_eq!(config.tiles.max_zoom, 8);  // MVP: z8 only
+        assert_eq!(config.tiles.min_zoom, 8);  // MVP: z8 only
         assert_eq!(config.database.notification_channel, "tiles_updated");
     }
 } 

@@ -29,8 +29,9 @@ RUN mkdir -p /var/cache/renderd \
 RUN useradd -m -u 1001 -s /bin/bash tiles || echo "User already exists"
 RUN chown -R tiles:tiles /var/cache/renderd /var/lib/pmtiles /var/log/tiles
 
-# Copy the built binary
+# Copy the built binaries
 COPY --from=builder /app/target/release/jvt /usr/local/bin/jvt
+COPY --from=builder /app/target/release/generate_initial_tiles /usr/local/bin/generate_initial_tiles
 
 # Copy scripts
 COPY scripts/ /usr/local/bin/

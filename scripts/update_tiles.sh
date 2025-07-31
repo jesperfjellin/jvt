@@ -26,8 +26,8 @@ osm2pgsql-replication update \
   --max-diff-size="${MAX_DIFF_SIZE}" \
   -- \
   --slim \
-  --cache=4000 \
-  --number-processes=4 \
+  --cache=1000 \
+  --number-processes=2 \
   --hstore \
   --multi-geometry \
   --keep-coastlines \
