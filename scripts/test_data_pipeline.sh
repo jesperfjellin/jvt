@@ -1,47 +1,60 @@
 #!/bin/bash
-# test_data_pipeline.sh - Simple data injection/deletion pipeline for testing change detection
-# This script simulates data changes to test our tile invalidation system
+# test_data_pipeline.sh - High-volume test data generator for JVT stress testing
+# Generates thousands of random changes across the entire data bounds
 
 set -euo pipefail
 
 DATABASE_URL="${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/gis}"
 
-echo "$(date): Starting test data pipeline..."
+echo "$(date): Starting HIGH-VOLUME test data pipeline..."
 
-# Counter for unique test features
-COUNTER_FILE="/tmp/jvt_test_counter"
-if [ ! -f "$COUNTER_FILE" ]; then
-    echo "0" > "$COUNTER_FILE"
-fi
+# Configuration
+BATCH_SIZE=1000  # Generate 1000 changes per run
+TEST_ID_START=9000000  # Start test IDs from 9 million to avoid conflicts
 
-COUNTER=$(cat "$COUNTER_FILE")
-NEXT_COUNTER=$((COUNTER + 1))
-echo "$NEXT_COUNTER" > "$COUNTER_FILE"
+# Get actual data bounds from database
+echo "$(date): Detecting data bounds..."
+BOUNDS=$(psql "$DATABASE_URL" -t -c "
+WITH bounds AS (
+    SELECT ST_Transform(ST_SetSRID(ST_Extent(way), 3857), 4326) as bbox
+    FROM (
+        SELECT way FROM planet_osm_point WHERE way IS NOT NULL
+        UNION ALL 
+        SELECT way FROM planet_osm_line WHERE way IS NOT NULL
+        UNION ALL
+        SELECT way FROM planet_osm_polygon WHERE way IS NOT NULL
+    ) all_geom
+)
+SELECT 
+    ST_XMin(bbox) as min_lon,
+    ST_YMin(bbox) as min_lat,
+    ST_XMax(bbox) as max_lon,
+    ST_YMax(bbox) as max_lat
+FROM bounds;
+" | tr -d ' ' | tr '\n' ' ')
 
-# Test coordinates around Oslo, Norway (since we're using Norway data)
-# Oslo center: approximately 59.9139, 10.7522
-BASE_LAT=59.9139
-BASE_LON=10.7522
+# Parse bounds
+read -r MIN_LON MIN_LAT MAX_LON MAX_LAT <<< "$BOUNDS"
 
-# Generate random offsets (within ~10km of Oslo center)
-# Use shell arithmetic instead of bc for simpler dependencies
-RANDOM_LAT=$((RANDOM % 1000))  # 0-999
-RANDOM_LON=$((RANDOM % 1000))  # 0-999
+echo "$(date): Data bounds detected:"
+echo "  Longitude: $MIN_LON to $MAX_LON"
+echo "  Latitude: $MIN_LAT to $MAX_LAT"
 
-# Convert to decimal offsets: 0-999 -> -0.05 to +0.05 degrees (~10km range)
-LAT_OFFSET=$(awk "BEGIN {printf \"%.6f\", ($RANDOM_LAT - 500) / 10000.0}")
-LON_OFFSET=$(awk "BEGIN {printf \"%.6f\", ($RANDOM_LON - 500) / 10000.0}")
+# Generate random coordinates within bounds
+generate_random_coords() {
+    local lon_range=$(awk "BEGIN {print $MAX_LON - $MIN_LON}")
+    local lat_range=$(awk "BEGIN {print $MAX_LAT - $MIN_LAT}")
+    
+    local rand_lon_offset=$(awk "BEGIN {print rand() * $lon_range}")
+    local rand_lat_offset=$(awk "BEGIN {print rand() * $lat_range}")
+    
+    local test_lon=$(awk "BEGIN {printf \"%.6f\", $MIN_LON + $rand_lon_offset}")
+    local test_lat=$(awk "BEGIN {printf \"%.6f\", $MIN_LAT + $rand_lat_offset}")
+    
+    echo "$test_lon $test_lat"
+}
 
-TEST_LAT=$(awk "BEGIN {printf \"%.6f\", $BASE_LAT + $LAT_OFFSET}")
-TEST_LON=$(awk "BEGIN {printf \"%.6f\", $BASE_LON + $LON_OFFSET}")
-
-echo "$(date): Test coordinates: $TEST_LAT, $TEST_LON"
-
-# Randomly choose an operation
-OPERATIONS=("INSERT" "UPDATE" "DELETE")
-OPERATION=${OPERATIONS[$((RANDOM % 3))]}
-
-echo "$(date): Performing operation: $OPERATION"
+echo "$(date): Generating $BATCH_SIZE random changes across entire bounds..."
 
 case $OPERATION in
     "INSERT")

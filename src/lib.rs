@@ -2,6 +2,7 @@ pub mod config;
 pub mod database;
 pub mod tiles;
 pub mod worker;
+pub mod api;
 
 // Re-export common types
 pub use config::Config;

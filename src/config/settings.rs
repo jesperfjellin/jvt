@@ -8,6 +8,7 @@ pub struct Config {
     pub tiles: TileConfig,
     pub files: FileConfig,
     pub worker: WorkerConfig,
+    pub geometry: GeometryConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +36,13 @@ pub struct WorkerConfig {
     pub max_retries: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeometryConfig {
+    pub schema: String,
+    pub tables: Vec<String>,
+    pub geometry_column: String,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -52,8 +60,18 @@ impl Default for Config {
                 pmtiles_archive_path: PathBuf::from("/var/lib/pmtiles/planet.pmtiles"),
             },
             worker: WorkerConfig {
-                batch_timeout_secs: 30,
+                batch_timeout_secs: 300,  // 5 minutes for batched processing
                 max_retries: 1,
+            },
+            geometry: GeometryConfig {
+                schema: "public".to_string(),
+                tables: vec![
+                    "planet_osm_point".to_string(),
+                    "planet_osm_line".to_string(),
+                    "planet_osm_polygon".to_string(),
+                    "planet_osm_roads".to_string(),
+                ],
+                geometry_column: "way".to_string(),
             },
         }
     }
@@ -71,6 +89,19 @@ impl Config {
         
         if let Ok(pmtiles_path) = std::env::var("PMTILES_ARCHIVE_PATH") {
             config.files.pmtiles_archive_path = PathBuf::from(pmtiles_path);
+        }
+        
+        // Override geometry configuration with environment variables if present
+        if let Ok(schema) = std::env::var("GEOMETRY_SCHEMA") {
+            config.geometry.schema = schema;
+        }
+        
+        if let Ok(tables) = std::env::var("GEOMETRY_TABLES") {
+            config.geometry.tables = tables.split(',').map(|s| s.trim().to_string()).collect();
+        }
+        
+        if let Ok(column) = std::env::var("GEOMETRY_COLUMN") {
+            config.geometry.geometry_column = column;
         }
         
         tracing::info!("Configuration loaded: {:?}", config);

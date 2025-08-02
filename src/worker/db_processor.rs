@@ -92,25 +92,17 @@ impl DatabaseTileProcessor {
 
         info!("Marking {} tiles as processed", batch.len());
 
-        // Convert tiles to JSON array for the PostgreSQL function
-        let tile_coords: Vec<Value> = batch.tiles.iter().map(|coord| {
-            serde_json::json!({
-                "z": coord.z,
-                "x": coord.x,
-                "y": coord.y
-            })
-        }).collect();
-
-        let query = "SELECT mark_tiles_processed($1::json[])";
-        let coord_array = serde_json::to_string(&tile_coords)
-            .context("Failed to serialize tile coordinates")?;
-
-        let result = self.database.query_one(query, &[&coord_array]).await
-            .context("Failed to mark tiles as processed")?;
+        // Use a simple UPDATE query instead of the complex JSON function
+        let mut updated_count = 0;
         
-        let updated_count: i32 = result.get(0);
-        info!("Marked {} tile changes as processed", updated_count);
+        for coord in &batch.tiles {
+            let query = "UPDATE changed_tiles SET processed_at = NOW() WHERE z = $1 AND x = $2 AND y = $3 AND processed_at IS NULL";
+            let result = self.database.execute(query, &[&(coord.z as i32), &(coord.x as i32), &(coord.y as i32)]).await
+                .context("Failed to mark tile as processed")?;
+            updated_count += result;
+        }
 
+        info!("Marked {} tile changes as processed", updated_count);
         Ok(())
     }
 
