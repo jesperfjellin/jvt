@@ -32,36 +32,39 @@ impl MvtGenerator {
 
     /// Internal implementation of tile generation
     async fn generate_tile_impl(&self, coord: &TileCoord) -> Result<Vec<u8>> {
-        // Query actual geometries from PostGIS using ST_AsMVT
+        // Query synthetic geometries from PostGIS using ST_AsMVT
         let mvt_query = "
             WITH bounds AS (
                 SELECT ST_TileEnvelope($1, $2, $3) AS geom
             )
-            SELECT ST_AsMVT(q, 'planet', 4096) AS mvt
+            SELECT ST_AsMVT(q, 'demo', 4096) AS mvt
             FROM (
                 SELECT 
-                    osm_id,
-                    tags,
-                    ST_AsMVTGeom(way, bounds.geom, 4096, 256, true) AS geom
-                FROM planet_osm_point, bounds
-                WHERE way && bounds.geom
-                    AND ST_Intersects(way, bounds.geom)
+                    id,
+                    demo_tag,
+                    'point' AS type,
+                    ST_AsMVTGeom(geom, bounds.geom, 4096, 256, true) AS geom
+                FROM demo_points, bounds
+                WHERE geom && bounds.geom
+                    AND ST_Intersects(geom, bounds.geom)
                 UNION ALL
                 SELECT 
-                    osm_id,
-                    tags,
-                    ST_AsMVTGeom(way, bounds.geom, 4096, 256, true) AS geom
-                FROM planet_osm_line, bounds
-                WHERE way && bounds.geom
-                    AND ST_Intersects(way, bounds.geom)
+                    id,
+                    demo_tag,
+                    'line' AS type,
+                    ST_AsMVTGeom(geom, bounds.geom, 4096, 256, true) AS geom
+                FROM demo_lines, bounds
+                WHERE geom && bounds.geom
+                    AND ST_Intersects(geom, bounds.geom)
                 UNION ALL
                 SELECT 
-                    osm_id,
-                    tags,
-                    ST_AsMVTGeom(way, bounds.geom, 4096, 256, true) AS geom
-                FROM planet_osm_polygon, bounds
-                WHERE way && bounds.geom
-                    AND ST_Intersects(way, bounds.geom)
+                    id,
+                    demo_tag,
+                    'polygon' AS type,
+                    ST_AsMVTGeom(geom, bounds.geom, 4096, 256, true) AS geom
+                FROM demo_polygons, bounds
+                WHERE geom && bounds.geom
+                    AND ST_Intersects(geom, bounds.geom)
             ) AS q
         ";
 

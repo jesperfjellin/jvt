@@ -68,11 +68,30 @@ impl BoundsDetector {
             .await
             .context("Failed to detect data bounds")?;
 
+        // Handle case where tables are empty (ST_Extent returns NULL)
+        let min_lon: Option<f64> = row.get(0);
+        let min_lat: Option<f64> = row.get(1);
+        let max_lon: Option<f64> = row.get(2);
+        let max_lat: Option<f64> = row.get(3);
+
+        if min_lon.is_none() || min_lat.is_none() || max_lon.is_none() || max_lat.is_none() {
+            tracing::warn!("No geometry data found in configured tables - using default global bounds");
+            // Return default global bounds for demo purposes
+            let default_bounds = GeographicBounds {
+                min_lon: -180.0,
+                min_lat: -85.0,
+                max_lon: 180.0,
+                max_lat: 85.0,
+            };
+            tracing::info!("Using default global bounds: {:?}", default_bounds);
+            return Ok(default_bounds);
+        }
+
         let bounds = GeographicBounds {
-            min_lon: row.get(0),
-            min_lat: row.get(1),
-            max_lon: row.get(2),
-            max_lat: row.get(3),
+            min_lon: min_lon.unwrap(),
+            min_lat: min_lat.unwrap(),
+            max_lon: max_lon.unwrap(),
+            max_lat: max_lat.unwrap(),
         };
 
         tracing::info!("Detected data bounds: {:?}", bounds);

@@ -66,12 +66,11 @@ impl Default for Config {
             geometry: GeometryConfig {
                 schema: "public".to_string(),
                 tables: vec![
-                    "planet_osm_point".to_string(),
-                    "planet_osm_line".to_string(),
-                    "planet_osm_polygon".to_string(),
-                    "planet_osm_roads".to_string(),
+                    "demo_points".to_string(),
+                    "demo_lines".to_string(),
+                    "demo_polygons".to_string(),
                 ],
-                geometry_column: "way".to_string(),
+                geometry_column: "geom".to_string(),
             },
         }
     }
