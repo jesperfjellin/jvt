@@ -41,11 +41,9 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/gis
       RUST_LOG: ${RUST_LOG:-info}
-      DIRTY_TILES_PATH: /var/cache/renderd
+
       PMTILES_ARCHIVE_PATH: /var/lib/pmtiles/planet.pmtiles
     volumes:
-      # Tile processing cache (fast access needed)
-      - ./cache/renderd:/var/cache/renderd
       # PMTiles archive on C drive (will grow large over time)  
       - pmtiles_data:/var/lib/pmtiles
       # Logs on local drive for easy access
@@ -56,33 +54,6 @@ services:
       - ./scripts:/usr/local/scripts:ro
     restart: unless-stopped
 
-  jvt-cron:
-    build: .
-    container_name: jvt-cron
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/gis
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      # Share tile processing cache
-      - ./cache/renderd:/var/cache/renderd
-      # Share logs
-      - ./logs:/var/log/tiles
-      # Map your planet file on C drive for import
-      - /mnt/c/_data/GIS/osm:/data/osm:ro
-      # Hot-reload scripts without rebuild
-      - ./scripts:/usr/local/scripts:ro
-    command: >
-      bash -c "
-      while true; do
-        echo \"[$(date)] Starting OSM update...\" >> /var/log/tiles/cron.log
-        /usr/local/scripts/update_tiles.sh >> /var/log/tiles/cron.log 2>&1
-        echo \"[$(date)] OSM update completed\" >> /var/log/tiles/cron.log
-        sleep 300
-      done"
-    restart: unless-stopped
 
   frontend:
     build: 

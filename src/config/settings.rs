@@ -26,9 +26,7 @@ pub struct TileConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileConfig {
-    pub dirty_tiles_path: PathBuf,
     pub pmtiles_archive_path: PathBuf,
-    pub dead_letter_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,9 +49,7 @@ impl Default for Config {
                 buffer: 256,
             },
             files: FileConfig {
-                dirty_tiles_path: PathBuf::from("/var/cache/renderd"),
                 pmtiles_archive_path: PathBuf::from("/var/lib/pmtiles/planet.pmtiles"),
-                dead_letter_path: PathBuf::from("/var/cache/renderd/dead_letter_tiles.txt"),
             },
             worker: WorkerConfig {
                 batch_timeout_secs: 30,
@@ -71,10 +67,6 @@ impl Config {
         // Override with environment variables if present
         if let Ok(db_url) = std::env::var("DATABASE_URL") {
             config.database.url = db_url;
-        }
-        
-        if let Ok(dirty_path) = std::env::var("DIRTY_TILES_PATH") {
-            config.files.dirty_tiles_path = PathBuf::from(dirty_path);
         }
         
         if let Ok(pmtiles_path) = std::env::var("PMTILES_ARCHIVE_PATH") {

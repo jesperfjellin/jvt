@@ -1,8 +1,7 @@
-use std::path::PathBuf;
 use tokio_postgres::{Client, NoTls};
 use tokio::time::{timeout, Duration};
 use anyhow::{Context, Result};
-use tracing::{info, warn, error, debug};
+use tracing::{info, error, debug};
 
 /// PostgreSQL notification listener for tile updates
 pub struct NotificationListener {
@@ -84,25 +83,7 @@ impl NotificationListener {
         }
     }
 
-    /// Parse notification payload to extract dirty tiles file path
-    pub fn parse_notification(&self, notification: &TileNotification) -> Result<PathBuf> {
-        // Expected payload format: "/var/cache/renderd/dirty_tiles.20250724_193245.txt"
-        let path_str = notification.payload.trim();
-        
-        if path_str.is_empty() {
-            return Err(anyhow::anyhow!("Empty notification payload"));
-        }
 
-        let path = PathBuf::from(path_str);
-        
-        if !path.exists() {
-            warn!("Dirty tiles file does not exist: {}", path_str);
-            return Err(anyhow::anyhow!("Dirty tiles file not found: {}", path_str));
-        }
-
-        info!("Parsed dirty tiles file: {}", path_str);
-        Ok(path)
-    }
 
     /// Get statistics about the listener
     pub async fn get_stats(&self) -> Result<ListenerStats> {
@@ -132,30 +113,4 @@ pub struct ListenerStats {
     pub committed_transactions: u64,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_notification_parsing() {
-        let notification = TileNotification {
-            channel: "tiles_updated".to_string(),
-            payload: "/tmp/test_dirty_tiles.txt".to_string(),
-            process_id: 12345,
-        };
-
-        // Create a temporary file for testing
-        std::fs::write("/tmp/test_dirty_tiles.txt", "14/8234/5425\n").unwrap();
-        
-        let listener = NotificationListener {
-            client: unsafe { std::mem::zeroed() }, // Not used in this test
-            channel: "tiles_updated".to_string(),
-        };
-
-        let path = listener.parse_notification(&notification).unwrap();
-        assert_eq!(path.to_string_lossy(), "/tmp/test_dirty_tiles.txt");
-
-        // Clean up
-        std::fs::remove_file("/tmp/test_dirty_tiles.txt").ok();
-    }
-} 
+ 

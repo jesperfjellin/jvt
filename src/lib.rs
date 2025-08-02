@@ -19,7 +19,7 @@ impl TileCoord {
         Self { z, x, y }
     }
     
-    /// Parse from "z/x/y" format used in dirty_tiles.txt
+    /// Parse from "z/x/y" format
     pub fn from_str(s: &str) -> Result<Self, String> {
         let parts: Vec<&str> = s.trim().split('/').collect();
         if parts.len() != 3 {

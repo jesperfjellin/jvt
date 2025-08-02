@@ -1,6 +1,6 @@
 # JVT - Incremental Vector Tiles
 
-Live, low-latency world map built from OpenStreetMap planet snapshots with minutely replication diffs. Built with Rust, PostGIS, and PMTiles.
+Live, low-latency vector tiles with database-driven change detection. Built with Rust, PostGIS, and PMTiles.
 
 ## Quick Start
 
@@ -22,13 +22,14 @@ docker-compose up postgres -d
 docker-compose logs -f postgres
 ```
 
-### 3. Import Planet Data
-
-Your planet file is already at `D:\data\gis\osm\planet\planet-latest.osm.pbf` (86GB). The import will take several hours and expand to ~700GB in PostgreSQL.
+### 3. Import Norway OSM Data
 
 ```bash
-# Run the planet import (takes 4-8 hours)
-docker-compose run --rm jvt-worker /usr/local/bin/import_planet.sh
+# Download Norway OSM data first
+wget https://download.geofabrik.de/europe/norway-latest.osm.pbf -P /mnt/c/_data/GIS/osm/
+
+# Run the Norway import (takes 10-30 minutes)
+docker-compose run --rm jvt-worker /usr/local/bin/import_norway.sh
 ```
 
 ### 4. Start the Worker
@@ -41,29 +42,27 @@ docker-compose up jvt-worker -d
 docker-compose logs -f jvt-worker
 ```
 
-### 5. Setup Minutely Updates
+### 5. Test Data Pipeline
 
-Add to your host's crontab (runs every 5 minutes):
 ```bash
-*/5 * * * * docker-compose exec jvt-worker /usr/local/bin/update_tiles.sh >> /var/log/tiles/cron.log 2>&1
+# Run the test data pipeline to simulate changes
+docker-compose exec jvt-worker /usr/local/bin/test_data_pipeline.sh
 ```
 
 ## Architecture
 
-- **PostGIS Database**: Stores OSM data (~700GB on D: drive)
-- **OSM2PGSQL**: Handles replication diffs every 5 minutes  
-- **Rust Worker**: Generates vector tiles and maintains PMTiles archive
-- **PMTiles Archive**: Incremental tile storage (grows over time)
+- **PostGIS Database**: Stores OSM Norway data with change detection triggers
+- **Database Triggers**: Automatically detect changes and queue tiles for regeneration
+- **Rust Worker**: Listens for database notifications and generates vector tiles
+- **PMTiles Archive**: Incremental tile storage that grows over time
 
 ## Storage Layout
 
 ```
-D:\data\gis\
-├── postgres-data\     # PostgreSQL data (~700GB)
-├── pmtiles\           # PMTiles archive (grows incrementally)
-└── osm\
-    └── planet\
-        └── planet-latest.osm.pbf  # Your 86GB source file
+jvt/
+├── logs/              # Application logs
+├── pmtiles_data/      # PMTiles archive (Docker volume)
+└── postgres_data/     # PostgreSQL data (Docker volume)
 ```
 
 ## Monitoring
@@ -77,6 +76,10 @@ SELECT pg_size_pretty(pg_database_size('gis'));"
 docker-compose exec postgres psql -U postgres -d gis -c "
 SELECT * FROM changed_tile_batches ORDER BY started_at DESC LIMIT 5;"
 
-# PMTiles archive size
-ls -lh D:\data\gis\pmtiles\planet.pmtiles
+# Pending tile changes
+docker-compose exec postgres psql -U postgres -d gis -c "
+SELECT z, x, y, count FROM get_pending_tiles() LIMIT 10;"
+
+# PMTiles archive stats
+docker-compose exec jvt-worker ls -lh /var/lib/pmtiles/
 ```

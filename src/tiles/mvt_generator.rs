@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crate::{TileCoord, Config};
 use crate::database::DatabasePool;
-use tokio_postgres::Row;
+
 
 /// MVT (Mapbox Vector Tiles) generator
 pub struct MvtGenerator {
@@ -19,6 +19,20 @@ impl MvtGenerator {
     pub async fn generate_tile(&self, coord: &TileCoord) -> Result<Vec<u8>> {
         tracing::debug!("Generating MVT tile for {}", coord.to_string());
         
+        // Add timeout to prevent hanging on problematic tiles
+        let timeout_duration = tokio::time::Duration::from_secs(30);
+        
+        match tokio::time::timeout(timeout_duration, self.generate_tile_impl(coord)).await {
+            Ok(result) => result,
+            Err(_) => {
+                tracing::error!("Timeout generating tile {}", coord.to_string());
+                Err(anyhow::anyhow!("Tile generation timeout"))
+            }
+        }
+    }
+    
+    /// Internal implementation of tile generation
+    async fn generate_tile_impl(&self, coord: &TileCoord) -> Result<Vec<u8>> {
         // Query actual geometries from PostGIS using ST_AsMVT
         let mvt_query = "
             WITH bounds AS (
@@ -74,7 +88,7 @@ impl MvtGenerator {
             }
             Err(e) => {
                 tracing::error!("Failed to generate MVT tile {}: {}", coord.to_string(), e);
-                Ok(vec![])
+                Err(anyhow::anyhow!("Database error: {}", e))
             }
         }
     }
@@ -84,6 +98,7 @@ impl MvtGenerator {
         let mut results = Vec::new();
         
         for coord in coords {
+            tracing::debug!("Generating tile {}", coord.to_string());
             match self.generate_tile(coord).await {
                 Ok(tile_data) => {
                     results.push((coord.clone(), tile_data));
@@ -91,6 +106,8 @@ impl MvtGenerator {
                 Err(e) => {
                     tracing::error!("Failed to generate tile {}: {}", coord.to_string(), e);
                     // Continue with other tiles instead of failing the entire batch
+                    // Add an empty tile to keep the batch size consistent
+                    results.push((coord.clone(), vec![]));
                 }
             }
         }

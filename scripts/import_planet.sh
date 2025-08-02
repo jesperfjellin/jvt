@@ -50,15 +50,6 @@ osm2pgsql \
 
 echo "$(date): Planet import completed successfully!"
 
-# Initialize replication (following docs/OSM2PGSQL.txt)
-echo "$(date): Initializing minutely replication..."
-
-osm2pgsql-replication init \
-    --database="$DATABASE_URL" \
-    --server https://planet.openstreetmap.org/replication/minute
-
-echo "$(date): Replication initialized. Ready for minutely updates!"
-
 # Show database size
 echo "$(date): Database import statistics:"
 psql "$DATABASE_URL" -c "
@@ -72,4 +63,4 @@ WHERE schemaname = 'public'
 ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
 "
 
-echo "$(date): Setup complete! You can now run update_tiles.sh for minutely updates." 
+echo "$(date): Setup complete! The JVT worker will detect changes via database triggers." 

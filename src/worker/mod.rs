@@ -1,5 +1,5 @@
-pub mod file_processor;
 pub mod tile_batch;
+pub mod db_processor;
 
-pub use file_processor::DirtyTilesProcessor;
-pub use tile_batch::TileBatch; 
+pub use tile_batch::TileBatch;
+pub use db_processor::DatabaseTileProcessor; 

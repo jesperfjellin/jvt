@@ -12,7 +12,6 @@ logs/
 init-scripts/*.log
 
 # Temporary files
-dirty_tiles*.txt
 *.tmp
 
 # Build artifacts

@@ -1,6 +1,6 @@
 #!/bin/bash
 # import_norway.sh - Norway OSM data import script for JVT project
-# This script imports norway-latest.osm.pbf into PostgreSQL with replication support
+# This script imports norway-latest.osm.pbf into PostgreSQL
 
 set -euo pipefail
 
@@ -51,26 +51,20 @@ osm2pgsql \
 
 echo "$(date): Norway import completed successfully!"
 
-# Initialize replication (following docs/OSM2PGSQL.txt)
-echo "$(date): Initializing minutely replication for Norway..."
-
-osm2pgsql-replication init \
-    --database="$DATABASE_URL" \
-    --server https://planet.openstreetmap.org/replication/minute
-
-echo "$(date): Replication initialized. Ready for minutely updates!"
-
-# Show database size
+# Show database size and verify table names
 echo "$(date): Norway database import statistics:"
 psql "$DATABASE_URL" -c "
 SELECT 
     schemaname,
     tablename,
-    pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size
+    pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size,
+    (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = tablename) as row_count_check
 FROM pg_tables 
 WHERE schemaname = 'public' 
     AND tablename LIKE 'planet_osm_%'
 ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
 "
 
-echo "$(date): Norway setup complete! You can now run update_tiles.sh for minutely updates." 
+echo "$(date): Confirming osm2pgsql created tables with 'planet_osm_' prefix even for Norway data"
+
+echo "$(date): Norway setup complete! The JVT worker will detect changes via database triggers." 

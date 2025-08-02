@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use crate::TileCoord;
 
@@ -7,7 +6,6 @@ use crate::TileCoord;
 #[derive(Debug, Clone)]
 pub struct TileBatch {
     pub tiles: HashSet<TileCoord>,
-    pub source_file: PathBuf,
     pub created_at: DateTime<Utc>,
     pub min_zoom: u8,
     pub max_zoom: u8,
@@ -15,10 +13,9 @@ pub struct TileBatch {
 
 impl TileBatch {
     /// Create a new empty tile batch
-    pub fn new(source_file: PathBuf) -> Self {
+    pub fn new() -> Self {
         Self {
             tiles: HashSet::new(),
-            source_file,
             created_at: Utc::now(),
             min_zoom: u8::MAX,
             max_zoom: 0,
@@ -66,7 +63,6 @@ impl TileBatch {
             min_zoom: if self.is_empty() { 0 } else { self.min_zoom },
             max_zoom: if self.is_empty() { 0 } else { self.max_zoom },
             zoom_distribution: zoom_counts,
-            source_file: self.source_file.clone(),
             created_at: self.created_at,
         }
     }
@@ -96,7 +92,6 @@ pub struct BatchSummary {
     pub min_zoom: u8,
     pub max_zoom: u8,
     pub zoom_distribution: std::collections::BTreeMap<u8, usize>,
-    pub source_file: PathBuf,
     pub created_at: DateTime<Utc>,
 }
 
@@ -104,11 +99,10 @@ impl std::fmt::Display for BatchSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "TileBatch: {} tiles (z{}-z{}), source: {}, created: {}",
+            "TileBatch: {} tiles (z{}-z{}), created: {}",
             self.total_tiles,
             self.min_zoom,
             self.max_zoom,
-            self.source_file.display(),
             self.created_at.format("%Y-%m-%d %H:%M:%S UTC")
         )
     }
@@ -120,7 +114,7 @@ mod tests {
 
     #[test]
     fn test_tile_batch_creation() {
-        let mut batch = TileBatch::new(PathBuf::from("/tmp/test.txt"));
+        let mut batch = TileBatch::new();
         
         assert!(batch.is_empty());
         assert_eq!(batch.len(), 0);
@@ -137,7 +131,7 @@ mod tests {
 
     #[test]
     fn test_tile_deduplication() {
-        let mut batch = TileBatch::new(PathBuf::from("/tmp/test.txt"));
+        let mut batch = TileBatch::new();
         
         let coord = TileCoord::new(10, 100, 200);
         batch.add_tile(coord.clone());
@@ -148,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_zoom_filtering() {
-        let mut batch = TileBatch::new(PathBuf::from("/tmp/test.txt"));
+        let mut batch = TileBatch::new();
         
         batch.add_tile(TileCoord::new(8, 100, 200));
         batch.add_tile(TileCoord::new(12, 300, 400));

@@ -3,9 +3,9 @@ use tracing::{info, error, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tokio::time::{sleep, Duration};
 
-use jvt::{Config, TileCoord};
+use jvt::Config;
 use jvt::database::{DatabasePool, NotificationListener};
-use jvt::worker::{DirtyTilesProcessor, TileBatch};
+use jvt::worker::DatabaseTileProcessor;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -34,8 +34,8 @@ async fn main() -> Result<()> {
     info!("Notification listener initialized for channel: {}", 
           config.database.notification_channel);
     
-    // Create dirty tiles processor
-    let processor = DirtyTilesProcessor::new(config.clone());
+    // Create database tile processor
+    let processor = DatabaseTileProcessor::new(database.clone(), config.clone());
     
     // Main worker loop
     run_worker_loop(&mut listener, &processor, &config).await?;
@@ -59,7 +59,7 @@ fn init_logging() -> Result<()> {
 /// Main worker loop - listen for notifications and process tiles
 async fn run_worker_loop(
     listener: &mut NotificationListener,
-    processor: &DirtyTilesProcessor,
+    processor: &DatabaseTileProcessor,
     config: &Config,
 ) -> Result<()> {
     info!("Starting worker loop (timeout: {}s)", config.worker.batch_timeout_secs);
@@ -97,22 +97,15 @@ async fn run_worker_loop(
 
 /// Process a single notification
 async fn process_notification(
-    listener: &NotificationListener,
-    processor: &DirtyTilesProcessor,
+    _listener: &NotificationListener,
+    processor: &DatabaseTileProcessor,
     notification: &jvt::database::listener::TileNotification,
 ) -> Result<()> {
-    // Parse the notification to get file path
-    let dirty_tiles_file = listener.parse_notification(notification)?;
-    
-    // Validate the file
-    let file_info = processor.validate_file(&dirty_tiles_file)?;
-    info!("Processing dirty tiles file: {}", file_info);
-    
-    // Process the file into a tile batch
-    let batch = processor.process_file(&dirty_tiles_file)?;
+    // Process the notification payload from database
+    let batch = processor.process_notification(&notification.payload).await?;
     
     if batch.is_empty() {
-        warn!("No valid tiles found in {}", dirty_tiles_file.display());
+        warn!("No pending tiles found in database");
         return Ok(());
     }
     
@@ -123,7 +116,10 @@ async fn process_notification(
     // TODO: Write to PMTiles archive
     // TODO: Update audit tables
     
-    info!("Processed {} tiles from {}", batch.len(), dirty_tiles_file.display());
+    // Mark tiles as processed in database
+    processor.mark_tiles_processed(&batch).await?;
+    
+    info!("Processed {} tiles from database", batch.len());
     
     Ok(())
 }

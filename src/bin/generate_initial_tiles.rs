@@ -1,7 +1,6 @@
 use anyhow::Result;
-use tracing::{info, error, warn};
+use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use std::collections::HashSet;
 
 use jvt::{Config, TileCoord};
 use jvt::database::DatabasePool;
@@ -31,7 +30,7 @@ async fn main() -> Result<()> {
     let mut pmtiles_writer = PmtilesWriter::new(config.clone());
     
     // Validate PMTiles archive
-    let archive_exists = pmtiles_writer.validate_archive()?;
+    let archive_exists = pmtiles_writer.validate_archive().await?;
     if archive_exists {
         warn!("PMTiles archive already exists, will append to it");
     } else {
@@ -42,8 +41,10 @@ async fn main() -> Result<()> {
     let tiles = generate_all_z8_tiles();
     info!("Generated {} z8 tile coordinates", tiles.len());
     
-    // Process tiles in batches
-    let batch_size = 1000;
+    // Generate all tiles first, then write to PMTiles in one operation
+    info!("Generating MVT data for all {} tiles...", tiles.len());
+    let mut all_tile_data = Vec::new();
+    let batch_size = 100;  // Reduce memory usage
     let mut processed = 0;
     let total_tiles = tiles.len();
     
@@ -58,9 +59,10 @@ async fn main() -> Result<()> {
         let tile_data = mvt_generator.generate_tiles(chunk).await?;
         
         if !tile_data.is_empty() {
-            // Write tiles to PMTiles archive
-            pmtiles_writer.write_tiles(&tile_data).await?;
-            info!("Wrote {} tiles to PMTiles archive", tile_data.len());
+            let batch_tile_count = tile_data.len();
+            // Accumulate tiles in memory
+            all_tile_data.extend(tile_data.into_iter());
+            info!("Generated {} tiles for batch {}", batch_tile_count, batch_num + 1);
         } else {
             warn!("No tile data generated for batch {}", batch_num + 1);
         }
@@ -70,6 +72,15 @@ async fn main() -> Result<()> {
         // Progress update
         let progress = (processed as f64 / total_tiles as f64) * 100.0;
         info!("Progress: {:.1}% ({}/{})", progress, processed, total_tiles);
+    }
+    
+    // Now write ALL tiles to PMTiles archive in one operation
+    if !all_tile_data.is_empty() {
+        info!("Writing {} tiles to PMTiles archive...", all_tile_data.len());
+        pmtiles_writer.write_tiles(&all_tile_data).await?;
+        info!("Successfully wrote {} tiles to PMTiles archive", all_tile_data.len());
+    } else {
+        warn!("No tile data to write to PMTiles archive");
     }
     
     // Show final statistics
@@ -83,7 +94,7 @@ async fn main() -> Result<()> {
 /// Initialize structured logging
 fn init_logging() -> Result<()> {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("debug"));
     
     tracing_subscriber::registry()
         .with(env_filter)
