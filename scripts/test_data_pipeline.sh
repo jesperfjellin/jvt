@@ -14,27 +14,63 @@ TEST_ID_START=9000000  # Start test IDs from 9 million to avoid conflicts
 
 # Get actual data bounds from database
 echo "$(date): Detecting data bounds..."
-BOUNDS=$(psql "$DATABASE_URL" -t -c "
+
+# Get bounds as separate queries to ensure proper parsing
+MIN_LON=$(psql "$DATABASE_URL" -t -A -c "
 WITH bounds AS (
     SELECT ST_Transform(ST_SetSRID(ST_Extent(way), 3857), 4326) as bbox
     FROM (
-        SELECT way FROM planet_osm_point WHERE way IS NOT NULL
+        SELECT way FROM planet_osm_point WHERE way IS NOT NULL LIMIT 100000
         UNION ALL 
-        SELECT way FROM planet_osm_line WHERE way IS NOT NULL
+        SELECT way FROM planet_osm_line WHERE way IS NOT NULL LIMIT 100000
         UNION ALL
-        SELECT way FROM planet_osm_polygon WHERE way IS NOT NULL
+        SELECT way FROM planet_osm_polygon WHERE way IS NOT NULL LIMIT 100000
     ) all_geom
 )
-SELECT 
-    ST_XMin(bbox) as min_lon,
-    ST_YMin(bbox) as min_lat,
-    ST_XMax(bbox) as max_lon,
-    ST_YMax(bbox) as max_lat
-FROM bounds;
-" | tr -d ' ' | tr '\n' ' ')
+SELECT ST_XMin(bbox) FROM bounds;
+")
 
-# Parse bounds
-read -r MIN_LON MIN_LAT MAX_LON MAX_LAT <<< "$BOUNDS"
+MIN_LAT=$(psql "$DATABASE_URL" -t -A -c "
+WITH bounds AS (
+    SELECT ST_Transform(ST_SetSRID(ST_Extent(way), 3857), 4326) as bbox
+    FROM (
+        SELECT way FROM planet_osm_point WHERE way IS NOT NULL LIMIT 100000
+        UNION ALL 
+        SELECT way FROM planet_osm_line WHERE way IS NOT NULL LIMIT 100000
+        UNION ALL
+        SELECT way FROM planet_osm_polygon WHERE way IS NOT NULL LIMIT 100000
+    ) all_geom
+)
+SELECT ST_YMin(bbox) FROM bounds;
+")
+
+MAX_LON=$(psql "$DATABASE_URL" -t -A -c "
+WITH bounds AS (
+    SELECT ST_Transform(ST_SetSRID(ST_Extent(way), 3857), 4326) as bbox
+    FROM (
+        SELECT way FROM planet_osm_point WHERE way IS NOT NULL LIMIT 100000
+        UNION ALL 
+        SELECT way FROM planet_osm_line WHERE way IS NOT NULL LIMIT 100000
+        UNION ALL
+        SELECT way FROM planet_osm_polygon WHERE way IS NOT NULL LIMIT 100000
+    ) all_geom
+)
+SELECT ST_XMax(bbox) FROM bounds;
+")
+
+MAX_LAT=$(psql "$DATABASE_URL" -t -A -c "
+WITH bounds AS (
+    SELECT ST_Transform(ST_SetSRID(ST_Extent(way), 3857), 4326) as bbox
+    FROM (
+        SELECT way FROM planet_osm_point WHERE way IS NOT NULL LIMIT 100000
+        UNION ALL 
+        SELECT way FROM planet_osm_line WHERE way IS NOT NULL LIMIT 100000
+        UNION ALL
+        SELECT way FROM planet_osm_polygon WHERE way IS NOT NULL LIMIT 100000
+    ) all_geom
+)
+SELECT ST_YMax(bbox) FROM bounds;
+")
 
 echo "$(date): Data bounds detected:"
 echo "  Longitude: $MIN_LON to $MAX_LON"
@@ -42,14 +78,15 @@ echo "  Latitude: $MIN_LAT to $MAX_LAT"
 
 # Generate random coordinates within bounds
 generate_random_coords() {
-    local lon_range=$(awk "BEGIN {print $MAX_LON - $MIN_LON}")
-    local lat_range=$(awk "BEGIN {print $MAX_LAT - $MIN_LAT}")
+    # Use shell arithmetic for more reliable calculations
+    local random_val1=$((RANDOM % 1000000))  # 0-999999
+    local random_val2=$((RANDOM % 1000000))  # 0-999999
     
-    local rand_lon_offset=$(awk "BEGIN {print rand() * $lon_range}")
-    local rand_lat_offset=$(awk "BEGIN {print rand() * $lat_range}")
-    
-    local test_lon=$(awk "BEGIN {printf \"%.6f\", $MIN_LON + $rand_lon_offset}")
-    local test_lat=$(awk "BEGIN {printf \"%.6f\", $MIN_LAT + $rand_lat_offset}")
+    # Convert to 0.0-1.0 range and calculate coordinates
+    local test_lon=$(awk -v min="$MIN_LON" -v max="$MAX_LON" -v rand="$random_val1" \
+                     'BEGIN {printf "%.6f", min + (max - min) * (rand / 1000000.0)}')
+    local test_lat=$(awk -v min="$MIN_LAT" -v max="$MAX_LAT" -v rand="$random_val2" \
+                     'BEGIN {printf "%.6f", min + (max - min) * (rand / 1000000.0)}')
     
     echo "$test_lon $test_lat"
 }
