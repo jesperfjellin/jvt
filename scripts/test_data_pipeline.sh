@@ -15,62 +15,26 @@ TEST_ID_START=9000000  # Start test IDs from 9 million to avoid conflicts
 # Get actual data bounds from database
 echo "$(date): Detecting data bounds..."
 
-# Get bounds as separate queries to ensure proper parsing
-MIN_LON=$(psql "$DATABASE_URL" -t -A -c "
+# Get bounds using simpler query (just use planet_osm_polygon for extent since it covers most area)
+BOUNDS_QUERY="
 WITH bounds AS (
     SELECT ST_Transform(ST_SetSRID(ST_Extent(way), 3857), 4326) as bbox
-    FROM (
-        SELECT way FROM planet_osm_point WHERE way IS NOT NULL LIMIT 100000
-        UNION ALL 
-        SELECT way FROM planet_osm_line WHERE way IS NOT NULL LIMIT 100000
-        UNION ALL
-        SELECT way FROM planet_osm_polygon WHERE way IS NOT NULL LIMIT 100000
-    ) all_geom
+    FROM planet_osm_polygon 
+    WHERE way IS NOT NULL
 )
-SELECT ST_XMin(bbox) FROM bounds;
-")
+SELECT 
+    ST_XMin(bbox) as min_lon,
+    ST_YMin(bbox) as min_lat,
+    ST_XMax(bbox) as max_lon,
+    ST_YMax(bbox) as max_lat
+FROM bounds;
+"
 
-MIN_LAT=$(psql "$DATABASE_URL" -t -A -c "
-WITH bounds AS (
-    SELECT ST_Transform(ST_SetSRID(ST_Extent(way), 3857), 4326) as bbox
-    FROM (
-        SELECT way FROM planet_osm_point WHERE way IS NOT NULL LIMIT 100000
-        UNION ALL 
-        SELECT way FROM planet_osm_line WHERE way IS NOT NULL LIMIT 100000
-        UNION ALL
-        SELECT way FROM planet_osm_polygon WHERE way IS NOT NULL LIMIT 100000
-    ) all_geom
-)
-SELECT ST_YMin(bbox) FROM bounds;
-")
+# Get all bounds in one query
+BOUNDS_RESULT=$(psql "$DATABASE_URL" -t -A -c "$BOUNDS_QUERY")
 
-MAX_LON=$(psql "$DATABASE_URL" -t -A -c "
-WITH bounds AS (
-    SELECT ST_Transform(ST_SetSRID(ST_Extent(way), 3857), 4326) as bbox
-    FROM (
-        SELECT way FROM planet_osm_point WHERE way IS NOT NULL LIMIT 100000
-        UNION ALL 
-        SELECT way FROM planet_osm_line WHERE way IS NOT NULL LIMIT 100000
-        UNION ALL
-        SELECT way FROM planet_osm_polygon WHERE way IS NOT NULL LIMIT 100000
-    ) all_geom
-)
-SELECT ST_XMax(bbox) FROM bounds;
-")
-
-MAX_LAT=$(psql "$DATABASE_URL" -t -A -c "
-WITH bounds AS (
-    SELECT ST_Transform(ST_SetSRID(ST_Extent(way), 3857), 4326) as bbox
-    FROM (
-        SELECT way FROM planet_osm_point WHERE way IS NOT NULL LIMIT 100000
-        UNION ALL 
-        SELECT way FROM planet_osm_line WHERE way IS NOT NULL LIMIT 100000
-        UNION ALL
-        SELECT way FROM planet_osm_polygon WHERE way IS NOT NULL LIMIT 100000
-    ) all_geom
-)
-SELECT ST_YMax(bbox) FROM bounds;
-")
+# Parse the pipe-separated result
+IFS='|' read -r MIN_LON MIN_LAT MAX_LON MAX_LAT <<< "$BOUNDS_RESULT"
 
 echo "$(date): Data bounds detected:"
 echo "  Longitude: $MIN_LON to $MAX_LON"
