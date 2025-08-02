@@ -54,58 +54,81 @@ generate_random_coords() {
     echo "$test_lon $test_lat"
 }
 
-echo "$(date): Generating $BATCH_SIZE random changes across entire bounds..."
+# Get a counter for unique IDs
+COUNTER_FILE="/tmp/jvt_test_counter"
+if [ ! -f "$COUNTER_FILE" ]; then
+    echo "0" > "$COUNTER_FILE"
+fi
+COUNTER=$(cat "$COUNTER_FILE")
 
-case $OPERATION in
-    "INSERT")
-        # Insert a new test point (using high positive IDs to avoid conflicts)
-        TEST_ID=$((9000000 + NEXT_COUNTER))  # Start from 9 million to avoid real OSM IDs
-        psql "$DATABASE_URL" << EOF
-INSERT INTO planet_osm_point (osm_id, way, tags) 
-VALUES (
-    $TEST_ID,  -- High positive IDs for test data
-    ST_Transform(ST_SetSRID(ST_MakePoint($TEST_LON, $TEST_LAT), 4326), 3857),
-    'name => "JVT Test Point $NEXT_COUNTER", amenity => test'::hstore
-);
-EOF
-        echo "$(date): Inserted test point $TEST_ID at ($TEST_LAT, $TEST_LON)"
-        ;;
-        
-    "UPDATE")
-        # Update an existing test point (if any exist)
-        UPDATED=$(psql "$DATABASE_URL" -t -c "
-UPDATE planet_osm_point 
-SET way = ST_Transform(ST_SetSRID(ST_MakePoint($TEST_LON, $TEST_LAT), 4326), 3857),
-    tags = tags || 'updated_at => $(date +%s)'::hstore
-WHERE osm_id >= 9000000  -- Only update our test points
-ORDER BY RANDOM() 
-LIMIT 1
-RETURNING osm_id;
-" | tr -d ' ')
-        
-        if [ -n "$UPDATED" ] && [ "$UPDATED" != "" ]; then
-            echo "$(date): Updated test point $UPDATED to ($TEST_LAT, $TEST_LON)"
-        else
-            echo "$(date): No test points available to update, skipping"
-        fi
-        ;;
-        
-    "DELETE")
-        # Delete a random test point (if any exist)
-        DELETED=$(psql "$DATABASE_URL" -t -c "
-DELETE FROM planet_osm_point 
-WHERE osm_id >= 9000000  -- Only delete our test points
-  AND RANDOM() < 0.5  -- Only delete 50% of the time
-RETURNING osm_id;
-" | tr -d ' ')
-        
-        if [ -n "$DELETED" ] && [ "$DELETED" != "" ]; then
-            echo "$(date): Deleted test point $DELETED"
-        else
-            echo "$(date): No test points available to delete, skipping"
-        fi
-        ;;
-esac
+# Generate bulk operations
+INSERTS=0
+UPDATES=0
+DELETES=0
+
+echo "$(date): Starting bulk operations..."
+
+# 1. BULK INSERTS (70% of operations)
+INSERT_COUNT=$((BATCH_SIZE * 70 / 100))
+echo "$(date): Performing $INSERT_COUNT bulk inserts..."
+
+for i in $(seq 1 $INSERT_COUNT); do
+    COORDS=$(generate_random_coords)
+    read -r LON LAT <<< "$COORDS"
+    TEST_ID=$((TEST_ID_START + COUNTER + i))
+    
+    psql "$DATABASE_URL" -c "
+    INSERT INTO planet_osm_point (osm_id, way, tags) 
+    VALUES (
+        $TEST_ID,
+        ST_Transform(ST_SetSRID(ST_MakePoint($LON, $LAT), 4326), 3857),
+        'name => \"JVT Stress Test $TEST_ID\", test_batch => \"$(date +%s)\", amenity => \"test\"'::hstore
+    );" > /dev/null
+    
+    INSERTS=$((INSERTS + 1))
+done
+
+# 2. BULK UPDATES (20% of operations)
+UPDATE_COUNT=$((BATCH_SIZE * 20 / 100))
+echo "$(date): Performing $UPDATE_COUNT bulk updates..."
+
+for i in $(seq 1 $UPDATE_COUNT); do
+    COORDS=$(generate_random_coords)
+    read -r LON LAT <<< "$COORDS"
+    
+    UPDATED=$(psql "$DATABASE_URL" -t -c "
+    UPDATE planet_osm_point 
+    SET way = ST_Transform(ST_SetSRID(ST_MakePoint($LON, $LAT), 4326), 3857),
+        tags = tags || 'updated_at => \"$(date +%s)\"'::hstore
+    WHERE osm_id >= $TEST_ID_START
+      AND RANDOM() < 0.1  -- Update 10% of existing test points
+    RETURNING osm_id;
+    " | head -1 | tr -d ' ')
+    
+    if [ -n "$UPDATED" ] && [ "$UPDATED" != "" ]; then
+        UPDATES=$((UPDATES + 1))
+    fi
+done
+
+# 3. BULK DELETES (10% of operations)
+DELETE_COUNT=$((BATCH_SIZE * 10 / 100))
+echo "$(date): Performing $DELETE_COUNT bulk deletes..."
+
+for i in $(seq 1 $DELETE_COUNT); do
+    DELETED=$(psql "$DATABASE_URL" -t -c "
+    DELETE FROM planet_osm_point 
+    WHERE osm_id >= $TEST_ID_START
+      AND RANDOM() < 0.05  -- Delete 5% of existing test points
+    RETURNING osm_id;
+    " | head -1 | tr -d ' ')
+    
+    if [ -n "$DELETED" ] && [ "$DELETED" != "" ]; then
+        DELETES=$((DELETES + 1))
+    fi
+done
+
+# Update counter
+echo $((COUNTER + INSERT_COUNT)) > "$COUNTER_FILE"
 
 # Show current pending tile count
 PENDING_COUNT=$(psql "$DATABASE_URL" -t -c "
