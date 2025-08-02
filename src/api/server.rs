@@ -51,7 +51,52 @@ impl ApiServer {
             database,
             config,
             bounds_detector,
+            bounds_cache: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Get or compute cached bounds and tile coverage
+    async fn get_cached_bounds_and_tiles(&self) -> Result<(GeographicBounds, Vec<TileCoord>)> {
+        // Check if we have valid cached data
+        {
+            let cache_lock = self.bounds_cache.lock().unwrap();
+            if let Some(ref cached) = *cache_lock {
+                // Cache is valid for 5 minutes (bounds rarely change)
+                if cached
+                    .computed_at
+                    .elapsed()
+                    .unwrap_or(std::time::Duration::MAX)
+                    < std::time::Duration::from_secs(300)
+                {
+                    return Ok((cached.bounds.clone(), cached.all_tiles.clone()));
+                }
+            }
+        }
+
+        // Cache miss or expired - compute new bounds
+        info!("Cache miss: computing new bounds and tile coverage");
+        let bounds = self.bounds_detector.detect_data_bounds().await?;
+        let zoom = self.config.tiles.max_zoom;
+        let all_tiles = self.bounds_detector.generate_tile_coverage(&bounds, zoom);
+
+        info!(
+            "Cached {} tiles for zoom {} covering bounds {:?}",
+            all_tiles.len(),
+            zoom,
+            bounds
+        );
+
+        // Update cache
+        {
+            let mut cache_lock = self.bounds_cache.lock().unwrap();
+            *cache_lock = Some(BoundsCache {
+                bounds: bounds.clone(),
+                all_tiles: all_tiles.clone(),
+                computed_at: SystemTime::now(),
+            });
+        }
+
+        Ok((bounds, all_tiles))
     }
 
     /// Create the API router
@@ -67,20 +112,10 @@ impl ApiServer {
 
     /// Get complete tile status data for all tiles within data bounds
     pub async fn get_tile_status_data(&self) -> Result<TileStatusResponse> {
-        // 1. Detect data bounds
-        let bounds = self.bounds_detector.detect_data_bounds().await?;
-        info!("Data bounds detected: {:?}", bounds);
+        // 1. Get cached bounds and tile coverage (efficient!)
+        let (_bounds, all_tiles) = self.get_cached_bounds_and_tiles().await?;
 
-        // 2. Generate complete tile coverage for the configured zoom level
-        let zoom = self.config.tiles.max_zoom; // Use max zoom from config
-        let all_tiles = self.bounds_detector.generate_tile_coverage(&bounds, zoom);
-        info!(
-            "Generated {} total tiles for zoom {}",
-            all_tiles.len(),
-            zoom
-        );
-
-        // 3. Get freshness status for all tiles that have been processed
+        // 2. Get freshness status for all tiles that have been processed
         let freshness_query = r#"
             SELECT z, x, y,
                    MAX(processed_at) as last_processed,
@@ -119,7 +154,7 @@ impl ApiServer {
             tile_freshness.insert(coord, (last_updated, is_fresh));
         }
 
-        // 4. Build complete tile status response
+        // 3. Build complete tile status response
         let mut tiles = Vec::new();
         let mut fresh_count = 0;
         let mut stale_count = 0;
