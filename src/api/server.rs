@@ -1,19 +1,28 @@
 use anyhow::Result;
 use axum::{Router, extract::State, http::StatusCode, response::Json, routing::get};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use tower_http::cors::CorsLayer;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
-use crate::database::{BoundsDetector, DatabasePool};
+use crate::database::{BoundsDetector, DatabasePool, GeographicBounds};
 use crate::{Config, TileCoord};
+
+/// Cached bounds and tile coverage data
+#[derive(Debug, Clone)]
+struct BoundsCache {
+    bounds: GeographicBounds,
+    all_tiles: Vec<TileCoord>,
+    computed_at: SystemTime,
+}
 
 /// API server for serving tile status data to the frontend
 pub struct ApiServer {
     database: DatabasePool,
     config: Config,
     bounds_detector: BoundsDetector,
+    bounds_cache: Arc<Mutex<Option<BoundsCache>>>,
 }
 
 /// Tile status response for the frontend
