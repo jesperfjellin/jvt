@@ -107,7 +107,7 @@ BEGIN
         -- Insert affected tiles into changed_tiles table
         INSERT INTO changed_tiles (z, x, y, source_table, operation)
         SELECT t.z, t.x, t.y, table_name, operation_type
-        FROM calculate_affected_tiles(geom_to_process) t
+        FROM calculate_affected_tiles(geom_to_process, 8, 8) t  -- Only generate z8 tiles to match worker config
         WHERE NOT EXISTS (
             SELECT 1 FROM changed_tiles ct 
             WHERE ct.z = t.z AND ct.x = t.x AND ct.y = t.y 

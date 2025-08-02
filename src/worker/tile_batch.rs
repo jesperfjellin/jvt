@@ -1,6 +1,6 @@
-use std::collections::HashSet;
-use chrono::{DateTime, Utc};
 use crate::TileCoord;
+use chrono::{DateTime, Utc};
+use std::collections::HashSet;
 
 /// A batch of tiles to be processed together
 #[derive(Debug, Clone)]
@@ -41,19 +41,20 @@ impl TileBatch {
 
     /// Get tiles grouped by zoom level
     pub fn tiles_by_zoom(&self) -> Vec<(u8, Vec<&TileCoord>)> {
-        let mut by_zoom: std::collections::BTreeMap<u8, Vec<&TileCoord>> = std::collections::BTreeMap::new();
-        
+        let mut by_zoom: std::collections::BTreeMap<u8, Vec<&TileCoord>> =
+            std::collections::BTreeMap::new();
+
         for tile in &self.tiles {
             by_zoom.entry(tile.z).or_default().push(tile);
         }
-        
+
         by_zoom.into_iter().collect()
     }
 
     /// Get a summary of the batch for logging
     pub fn summary(&self) -> BatchSummary {
         let mut zoom_counts = std::collections::BTreeMap::new();
-        
+
         for tile in &self.tiles {
             *zoom_counts.entry(tile.z).or_insert(0) += 1;
         }
@@ -115,14 +116,14 @@ mod tests {
     #[test]
     fn test_tile_batch_creation() {
         let mut batch = TileBatch::new();
-        
+
         assert!(batch.is_empty());
         assert_eq!(batch.len(), 0);
-        
+
         batch.add_tile(TileCoord::new(10, 100, 200));
         batch.add_tile(TileCoord::new(12, 300, 400));
         batch.add_tile(TileCoord::new(10, 101, 201)); // Different tile, same zoom
-        
+
         assert!(!batch.is_empty());
         assert_eq!(batch.len(), 3);
         assert_eq!(batch.min_zoom, 10);
@@ -132,25 +133,25 @@ mod tests {
     #[test]
     fn test_tile_deduplication() {
         let mut batch = TileBatch::new();
-        
+
         let coord = TileCoord::new(10, 100, 200);
         batch.add_tile(coord.clone());
         batch.add_tile(coord); // Duplicate
-        
+
         assert_eq!(batch.len(), 1); // Should deduplicate
     }
 
     #[test]
     fn test_zoom_filtering() {
         let mut batch = TileBatch::new();
-        
+
         batch.add_tile(TileCoord::new(8, 100, 200));
         batch.add_tile(TileCoord::new(12, 300, 400));
         batch.add_tile(TileCoord::new(16, 500, 600));
-        
+
         batch.filter_max_zoom(14);
-        
+
         assert_eq!(batch.len(), 2); // Should remove z16 tile
         assert_eq!(batch.max_zoom, 12);
     }
-} 
+}

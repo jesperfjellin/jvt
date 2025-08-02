@@ -1,19 +1,13 @@
 use anyhow::Result;
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::Json,
-    routing::get,
-    Router,
-};
+use axum::{Router, extract::State, http::StatusCode, response::Json, routing::get};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::SystemTime;
 use tower_http::cors::CorsLayer;
-use tracing::{info, error};
+use tracing::{error, info};
 
+use crate::database::{BoundsDetector, DatabasePool};
 use crate::{Config, TileCoord};
-use crate::database::{DatabasePool, BoundsDetector};
 
 /// API server for serving tile status data to the frontend
 pub struct ApiServer {
@@ -29,7 +23,7 @@ pub struct TileStatus {
     pub x: u32,
     pub y: u32,
     pub last_updated: Option<String>, // ISO timestamp or null
-    pub is_fresh: bool, // true if updated in last 5 minutes
+    pub is_fresh: bool,               // true if updated in last 5 minutes
 }
 
 /// API response containing tile status data
@@ -44,7 +38,7 @@ pub struct TileStatusResponse {
 impl ApiServer {
     pub fn new(database: DatabasePool, config: Config) -> Self {
         let bounds_detector = BoundsDetector::new(database.clone(), config.clone());
-        Self { 
+        Self {
             database,
             config,
             bounds_detector,
@@ -54,7 +48,7 @@ impl ApiServer {
     /// Create the API router
     pub fn router(self) -> Router {
         let shared_state = Arc::new(self);
-        
+
         Router::new()
             .route("/api/tile-status", get(get_tile_status))
             .route("/api/health", get(health_check))
@@ -67,12 +61,16 @@ impl ApiServer {
         // 1. Detect data bounds
         let bounds = self.bounds_detector.detect_data_bounds().await?;
         info!("Data bounds detected: {:?}", bounds);
-        
+
         // 2. Generate complete tile coverage for the configured zoom level
         let zoom = self.config.tiles.max_zoom; // Use max zoom from config
         let all_tiles = self.bounds_detector.generate_tile_coverage(&bounds, zoom);
-        info!("Generated {} total tiles for zoom {}", all_tiles.len(), zoom);
-        
+        info!(
+            "Generated {} total tiles for zoom {}",
+            all_tiles.len(),
+            zoom
+        );
+
         // 3. Get freshness status for all tiles that have been processed
         let freshness_query = r#"
             SELECT z, x, y,
@@ -85,9 +83,9 @@ impl ApiServer {
             WHERE processed_at IS NOT NULL
             GROUP BY z, x, y
         "#;
-        
+
         let rows = self.database.query(freshness_query, &[]).await?;
-        
+
         // Build a map of tile coordinates to freshness status
         let mut tile_freshness = std::collections::HashMap::new();
         for row in rows {
@@ -96,39 +94,39 @@ impl ApiServer {
             let y: i32 = row.get(2);
             let last_processed: Option<SystemTime> = row.get(3);
             let is_fresh: bool = row.get(4);
-            
+
             let coord = TileCoord::new(z as u8, x as u32, y as u32);
-            let last_updated = last_processed
-                .and_then(|st| {
-                    st.duration_since(SystemTime::UNIX_EPOCH)
-                        .ok()
-                        .map(|duration| {
-                            let secs = duration.as_secs();
-                            chrono::DateTime::from_timestamp(secs as i64, 0)
-                                .map(|dt| dt.to_rfc3339())
-                                .unwrap_or_else(|| "Invalid timestamp".to_string())
-                        })
-                });
-            
+            let last_updated = last_processed.and_then(|st| {
+                st.duration_since(SystemTime::UNIX_EPOCH)
+                    .ok()
+                    .map(|duration| {
+                        let secs = duration.as_secs();
+                        chrono::DateTime::from_timestamp(secs as i64, 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_else(|| "Invalid timestamp".to_string())
+                    })
+            });
+
             tile_freshness.insert(coord, (last_updated, is_fresh));
         }
-        
+
         // 4. Build complete tile status response
         let mut tiles = Vec::new();
         let mut fresh_count = 0;
         let mut stale_count = 0;
-        
+
         for tile_coord in all_tiles {
-            let (last_updated, is_fresh) = tile_freshness.get(&tile_coord)
+            let (last_updated, is_fresh) = tile_freshness
+                .get(&tile_coord)
                 .map(|(last, fresh)| (last.clone(), *fresh))
                 .unwrap_or((None, false)); // Default to stale if never processed
-            
+
             if is_fresh {
                 fresh_count += 1;
             } else {
                 stale_count += 1;
             }
-            
+
             tiles.push(TileStatus {
                 z: tile_coord.z,
                 x: tile_coord.x,
@@ -137,7 +135,7 @@ impl ApiServer {
                 is_fresh,
             });
         }
-        
+
         Ok(TileStatusResponse {
             tiles,
             fresh_count,
@@ -153,8 +151,10 @@ async fn get_tile_status(
 ) -> Result<Json<TileStatusResponse>, StatusCode> {
     match api_server.get_tile_status_data().await {
         Ok(response) => {
-            info!("Served tile status: {} fresh, {} stale tiles", 
-                  response.fresh_count, response.stale_count);
+            info!(
+                "Served tile status: {} fresh, {} stale tiles",
+                response.fresh_count, response.stale_count
+            );
             Ok(Json(response))
         }
         Err(e) => {

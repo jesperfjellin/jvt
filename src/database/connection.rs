@@ -1,7 +1,7 @@
+use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio_postgres::{Client, NoTls, Row};
-use anyhow::{Context, Result};
-use tracing::{info, error};
+use tracing::{error, info};
 
 /// Database connection pool for PostgreSQL
 #[derive(Clone)]
@@ -13,7 +13,7 @@ impl DatabasePool {
     /// Create a new database connection pool
     pub async fn new(database_url: &str) -> Result<Self> {
         info!("Connecting to PostgreSQL: {}", mask_password(database_url));
-        
+
         let (client, connection) = tokio_postgres::connect(database_url, NoTls)
             .await
             .context("Failed to connect to PostgreSQL")?;
@@ -30,9 +30,8 @@ impl DatabasePool {
             .query_one("SELECT version()", &[])
             .await
             .context("Failed to test database connection")?;
-        
-        info!("Connected to PostgreSQL: {}", 
-              version.get::<_, String>(0));
+
+        info!("Connected to PostgreSQL: {}", version.get::<_, String>(0));
 
         Ok(Self {
             client: Arc::new(client),
@@ -45,7 +44,11 @@ impl DatabasePool {
     }
 
     /// Execute a query and return all rows
-    pub async fn query(&self, query: &str, params: &[&(dyn tokio_postgres::types::ToSql + Sync)]) -> Result<Vec<Row>> {
+    pub async fn query(
+        &self,
+        query: &str,
+        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    ) -> Result<Vec<Row>> {
         self.client
             .query(query, params)
             .await
@@ -53,7 +56,11 @@ impl DatabasePool {
     }
 
     /// Execute a query and return a single row
-    pub async fn query_one(&self, query: &str, params: &[&(dyn tokio_postgres::types::ToSql + Sync)]) -> Result<Row> {
+    pub async fn query_one(
+        &self,
+        query: &str,
+        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    ) -> Result<Row> {
         self.client
             .query_one(query, params)
             .await
@@ -61,7 +68,11 @@ impl DatabasePool {
     }
 
     /// Execute a query that doesn't return rows
-    pub async fn execute(&self, query: &str, params: &[&(dyn tokio_postgres::types::ToSql + Sync)]) -> Result<u64> {
+    pub async fn execute(
+        &self,
+        query: &str,
+        params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    ) -> Result<u64> {
         self.client
             .execute(query, params)
             .await
@@ -110,4 +121,4 @@ mod tests {
         let masked = mask_password(url);
         assert_eq!(masked, "postgresql://user@localhost:5432/db");
     }
-} 
+}

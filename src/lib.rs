@@ -1,8 +1,8 @@
+pub mod api;
 pub mod config;
 pub mod database;
 pub mod tiles;
 pub mod worker;
-pub mod api;
 
 // Re-export common types
 pub use config::Config;
@@ -19,24 +19,27 @@ impl TileCoord {
     pub fn new(z: u8, x: u32, y: u32) -> Self {
         Self { z, x, y }
     }
-    
+
     /// Parse from "z/x/y" format
     pub fn from_str(s: &str) -> Result<Self, String> {
         let parts: Vec<&str> = s.trim().split('/').collect();
         if parts.len() != 3 {
             return Err(format!("Invalid tile coordinate format: {}", s));
         }
-        
-        let z = parts[0].parse::<u8>()
+
+        let z = parts[0]
+            .parse::<u8>()
             .map_err(|_| format!("Invalid zoom level: {}", parts[0]))?;
-        let x = parts[1].parse::<u32>()
+        let x = parts[1]
+            .parse::<u32>()
             .map_err(|_| format!("Invalid x coordinate: {}", parts[1]))?;
-        let y = parts[2].parse::<u32>()
+        let y = parts[2]
+            .parse::<u32>()
             .map_err(|_| format!("Invalid y coordinate: {}", parts[2]))?;
-            
+
         Ok(TileCoord::new(z, x, y))
     }
-    
+
     /// Format as "z/x/y" string
     pub fn to_string(&self) -> String {
         format!("{}/{}/{}", self.z, self.x, self.y)
@@ -62,4 +65,4 @@ mod tests {
         assert!(TileCoord::from_str("14/8234").is_err());
         assert!(TileCoord::from_str("14/8234/5425/extra").is_err());
     }
-} 
+}

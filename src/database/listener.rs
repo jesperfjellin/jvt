@@ -1,7 +1,7 @@
-use tokio_postgres::{Client, NoTls};
-use tokio::time::{timeout, Duration};
 use anyhow::{Context, Result};
-use tracing::{info, error, debug};
+use tokio::time::{Duration, timeout};
+use tokio_postgres::{Client, NoTls};
+use tracing::{debug, error, info};
 
 /// PostgreSQL notification listener for tile updates
 pub struct NotificationListener {
@@ -21,7 +21,7 @@ impl NotificationListener {
     /// Create a new notification listener
     pub async fn new(database_url: &str, channel: &str) -> Result<Self> {
         info!("Creating notification listener for channel: {}", channel);
-        
+
         let (client, connection) = tokio_postgres::connect(database_url, NoTls)
             .await
             .context("Failed to connect to PostgreSQL for notifications")?;
@@ -51,24 +51,28 @@ impl NotificationListener {
             .execute(&listen_query, &[])
             .await
             .context("Failed to LISTEN to notification channel")?;
-        
+
         info!("Listening for notifications on channel: {}", self.channel);
         Ok(())
     }
 
     /// Wait for the next notification with a timeout
-    pub async fn wait_for_notification(&mut self, timeout_duration: Duration) -> Result<Option<TileNotification>> {
+    pub async fn wait_for_notification(
+        &mut self,
+        timeout_duration: Duration,
+    ) -> Result<Option<TileNotification>> {
         // Simple timeout implementation - just wait for the full duration
         // In a real implementation, this would listen for actual PostgreSQL NOTIFY events
-        debug!("Waiting for notifications or timeout after {:?}", timeout_duration);
-        
+        debug!(
+            "Waiting for notifications or timeout after {:?}",
+            timeout_duration
+        );
+
         tokio::time::sleep(timeout_duration).await;
-        
+
         debug!("Notification timeout after {:?}", timeout_duration);
         Ok(None) // Always timeout for now - notification handling is simplified
     }
-
-
 
     /// Get statistics about the listener
     pub async fn get_stats(&self) -> Result<ListenerStats> {
@@ -80,7 +84,8 @@ impl NotificationListener {
             WHERE datname = current_database()
         ";
 
-        let row = self.client
+        let row = self
+            .client
             .query_one(notifications_query, &[])
             .await
             .context("Failed to get listener statistics")?;
@@ -97,5 +102,3 @@ pub struct ListenerStats {
     pub active_connections: u64,
     pub committed_transactions: u64,
 }
-
- 

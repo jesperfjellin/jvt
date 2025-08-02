@@ -1,11 +1,11 @@
+use super::TileBatch;
+use crate::database::DatabasePool;
+use crate::{Config, TileCoord};
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::time::SystemTime;
-use tracing::{info, debug};
-use crate::{TileCoord, Config};
-use crate::database::DatabasePool;
-use super::TileBatch;
+use tracing::{debug, info};
 
 /// Processor for database-based tile change detection
 pub struct DatabaseTileProcessor {
@@ -22,24 +22,29 @@ impl DatabaseTileProcessor {
     /// Process a notification from the database and return affected tiles
     pub async fn process_notification(&self, notification_payload: &str) -> Result<TileBatch> {
         info!("Processing notification payload: {}", notification_payload);
-        
+
         // Parse the JSON notification
         let payload: Value = serde_json::from_str(notification_payload)
             .context("Failed to parse notification payload as JSON")?;
-        
-        let table_name = payload.get("table")
+
+        let table_name = payload
+            .get("table")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
-        let operation = payload.get("operation")
+        let operation = payload
+            .get("operation")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
-        let tile_count = payload.get("tile_count")
+        let tile_count = payload
+            .get("tile_count")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-            
-        info!("Change detected: {} {} affected {} tiles", 
-              operation, table_name, tile_count);
-        
+
+        info!(
+            "Change detected: {} {} affected {} tiles",
+            operation, table_name, tile_count
+        );
+
         // Get pending tiles from database
         self.get_pending_tiles().await
     }
@@ -47,11 +52,14 @@ impl DatabaseTileProcessor {
     /// Get a batch of pending tiles from the changed_tiles table
     pub async fn get_pending_tiles(&self) -> Result<TileBatch> {
         debug!("Fetching pending tiles batch from database");
-        
+
         // Process tiles in batches of 1000 to avoid overwhelming the system
         let batch_size = 1000i32;
         let query = "SELECT z, x, y, count FROM get_pending_tiles($1)";
-        let rows = self.database.query(query, &[&batch_size]).await
+        let rows = self
+            .database
+            .query(query, &[&batch_size])
+            .await
             .context("Failed to get pending tiles")?;
 
         let mut batch = TileBatch::new();
@@ -62,16 +70,21 @@ impl DatabaseTileProcessor {
             let x: i32 = row.get(1);
             let y: i32 = row.get(2);
             let change_count: i64 = row.get(3);
-            
+
             // Filter by max zoom if configured
             if z as u8 <= self.config.tiles.max_zoom {
                 let coord = TileCoord::new(z as u8, x as u32, y as u32);
-                debug!("Found changed tile {} (changed {} times)", 
-                       coord.to_string(), change_count);
+                debug!(
+                    "Found changed tile {} (changed {} times)",
+                    coord.to_string(),
+                    change_count
+                );
                 tile_set.insert(coord);
             } else {
-                debug!("Skipping tile {}/{}/{} (zoom {} > max {})", 
-                       z, x, y, z, self.config.tiles.max_zoom);
+                debug!(
+                    "Skipping tile {}/{}/{} (zoom {} > max {})",
+                    z, x, y, z, self.config.tiles.max_zoom
+                );
             }
         }
 
@@ -82,7 +95,7 @@ impl DatabaseTileProcessor {
 
         let summary = batch.summary();
         info!("Retrieved pending tiles: {}", summary);
-        
+
         Ok(batch)
     }
 
@@ -96,10 +109,16 @@ impl DatabaseTileProcessor {
 
         // Use a simple UPDATE query instead of the complex JSON function
         let mut updated_count = 0;
-        
+
         for coord in &batch.tiles {
             let query = "UPDATE changed_tiles SET processed_at = NOW() WHERE z = $1 AND x = $2 AND y = $3 AND processed_at IS NULL";
-            let result = self.database.execute(query, &[&(coord.z as i32), &(coord.x as i32), &(coord.y as i32)]).await
+            let result = self
+                .database
+                .execute(
+                    query,
+                    &[&(coord.z as i32), &(coord.x as i32), &(coord.y as i32)],
+                )
+                .await
                 .context("Failed to mark tile as processed")?;
             updated_count += result;
         }
@@ -121,7 +140,10 @@ impl DatabaseTileProcessor {
             WHERE processed_at IS NULL
         "#;
 
-        let row = self.database.query_one(query, &[]).await
+        let row = self
+            .database
+            .query_one(query, &[])
+            .await
             .context("Failed to get change statistics")?;
 
         Ok(ChangeStats {
@@ -142,7 +164,10 @@ impl DatabaseTileProcessor {
         "#;
 
         let formatted_query = query.replace("%d", &older_than_hours.to_string());
-        let result = self.database.execute(&formatted_query, &[]).await
+        let result = self
+            .database
+            .execute(&formatted_query, &[])
+            .await
             .context("Failed to cleanup processed changes")?;
 
         info!("Cleaned up {} old processed tile changes", result);
@@ -153,7 +178,7 @@ impl DatabaseTileProcessor {
 #[derive(Debug)]
 pub struct ChangeStats {
     pub total_changes: u64,
-    pub zoom_levels: u64, 
+    pub zoom_levels: u64,
     pub unique_tiles: u64,
     pub oldest_change: Option<SystemTime>,
     pub newest_change: Option<SystemTime>,
@@ -177,8 +202,11 @@ mod tests {
     fn test_notification_parsing() {
         let payload = r#"{"table": "planet_osm_point", "operation": "INSERT", "tile_count": 5}"#;
         let parsed: Value = serde_json::from_str(payload).unwrap();
-        
-        assert_eq!(parsed.get("table").unwrap().as_str().unwrap(), "planet_osm_point");
+
+        assert_eq!(
+            parsed.get("table").unwrap().as_str().unwrap(),
+            "planet_osm_point"
+        );
         assert_eq!(parsed.get("operation").unwrap().as_str().unwrap(), "INSERT");
         assert_eq!(parsed.get("tile_count").unwrap().as_u64().unwrap(), 5);
     }
