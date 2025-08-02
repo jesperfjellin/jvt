@@ -130,27 +130,46 @@ done
 # Update counter
 echo $((COUNTER + INSERT_COUNT)) > "$COUNTER_FILE"
 
-# Show current pending tile count
+# Show comprehensive statistics
+echo ""
+echo "$(date): BULK OPERATION SUMMARY:"
+echo "  Inserts: $INSERTS / $INSERT_COUNT"
+echo "  Updates: $UPDATES / $UPDATE_COUNT" 
+echo "  Deletes: $DELETES / $DELETE_COUNT"
+echo "  Total changes: $((INSERTS + UPDATES + DELETES))"
+
+# Show pending tile count
 PENDING_COUNT=$(psql "$DATABASE_URL" -t -c "
 SELECT COUNT(DISTINCT (z, x, y)) 
 FROM changed_tiles 
 WHERE processed_at IS NULL;
 " | tr -d ' ')
 
-echo "$(date): Current pending tiles: $PENDING_COUNT"
+echo "  Pending tiles: $PENDING_COUNT"
 
-# Show some recent changes for debugging
-echo "$(date): Recent changes:"
+# Show recent tile activity (top 10 most affected tiles)
+echo ""
+echo "$(date): Top affected tiles:"
 psql "$DATABASE_URL" -c "
-SELECT 
-    z, x, y, 
-    source_table, 
-    operation, 
-    changed_at,
-    processed_at IS NULL as pending
+SELECT z, x, y, COUNT(*) as change_count,
+       MIN(changed_at) as first_change,
+       MAX(changed_at) as last_change,
+       CASE WHEN MAX(processed_at) IS NULL THEN 'PENDING' 
+            WHEN MAX(processed_at) > NOW() - INTERVAL '5 minutes' THEN 'FRESH'
+            ELSE 'STALE' END as status
 FROM changed_tiles 
-ORDER BY changed_at DESC 
-LIMIT 5;
+WHERE changed_at > NOW() - INTERVAL '10 minutes'
+GROUP BY z, x, y
+ORDER BY change_count DESC, last_change DESC
+LIMIT 10;
 "
 
-echo "$(date): Test data pipeline completed"
+# Show test data count
+TEST_DATA_COUNT=$(psql "$DATABASE_URL" -t -c "
+SELECT COUNT(*) FROM planet_osm_point WHERE osm_id >= $TEST_ID_START;
+" | tr -d ' ')
+
+echo ""
+echo "$(date): Total test data points in database: $TEST_DATA_COUNT"
+echo "$(date): HIGH-VOLUME test data pipeline completed"
+echo "$(date): Ready for next batch in 60 seconds..."
