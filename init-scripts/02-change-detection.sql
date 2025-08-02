@@ -141,8 +141,8 @@ CREATE TRIGGER planet_osm_roads_changes
     AFTER INSERT OR UPDATE OR DELETE ON planet_osm_roads
     FOR EACH ROW EXECUTE FUNCTION track_geometry_changes();
 
--- Helper function to get pending tile changes
-CREATE OR REPLACE FUNCTION get_pending_tiles()
+-- Helper function to get pending tile changes with limit
+CREATE OR REPLACE FUNCTION get_pending_tiles(batch_limit integer DEFAULT 1000)
 RETURNS TABLE(z integer, x integer, y integer, count bigint) AS $$
 BEGIN
     RETURN QUERY
@@ -150,7 +150,8 @@ BEGIN
     FROM changed_tiles ct
     WHERE ct.processed_at IS NULL
     GROUP BY ct.z, ct.x, ct.y
-    ORDER BY ct.z, ct.x, ct.y;
+    ORDER BY count(*) DESC, ct.z, ct.x, ct.y  -- Process highest-change tiles first
+    LIMIT batch_limit;
 END;
 $$ LANGUAGE plpgsql;
 

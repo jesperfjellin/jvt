@@ -44,12 +44,14 @@ impl DatabaseTileProcessor {
         self.get_pending_tiles().await
     }
 
-    /// Get all pending tiles from the changed_tiles table
+    /// Get a batch of pending tiles from the changed_tiles table
     pub async fn get_pending_tiles(&self) -> Result<TileBatch> {
-        debug!("Fetching pending tiles from database");
+        debug!("Fetching pending tiles batch from database");
         
-        let query = "SELECT z, x, y, count FROM get_pending_tiles()";
-        let rows = self.database.query(query, &[]).await
+        // Process tiles in batches of 1000 to avoid overwhelming the system
+        let batch_size = 1000i32;
+        let query = "SELECT z, x, y, count FROM get_pending_tiles($1)";
+        let rows = self.database.query(query, &[&batch_size]).await
             .context("Failed to get pending tiles")?;
 
         let mut batch = TileBatch::new();

@@ -46,11 +46,11 @@ generate_random_coords() {
     local random_val1=$((RANDOM % 1000000))  # 0-999999
     local random_val2=$((RANDOM % 1000000))  # 0-999999
     
-    # Convert to 0.0-1.0 range and calculate coordinates
-    local test_lon=$(awk -v min="$MIN_LON" -v max="$MAX_LON" -v rand="$random_val1" \
-                     'BEGIN {printf "%.6f", min + (max - min) * (rand / 1000000.0)}')
-    local test_lat=$(awk -v min="$MIN_LAT" -v max="$MAX_LAT" -v rand="$random_val2" \
-                     'BEGIN {printf "%.6f", min + (max - min) * (rand / 1000000.0)}')
+    # Convert to 0.0-1.0 range and calculate coordinates (avoid 'rand' variable name)
+    local test_lon=$(awk -v min="$MIN_LON" -v max="$MAX_LON" -v rval="$random_val1" \
+                     'BEGIN {printf "%.6f", min + (max - min) * (rval / 1000000.0)}')
+    local test_lat=$(awk -v min="$MIN_LAT" -v max="$MAX_LAT" -v rval="$random_val2" \
+                     'BEGIN {printf "%.6f", min + (max - min) * (rval / 1000000.0)}')
     
     echo "$test_lon $test_lat"
 }

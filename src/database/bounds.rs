@@ -27,36 +27,34 @@ impl BoundsDetector {
     pub async fn detect_data_bounds(&self) -> Result<GeographicBounds> {
         tracing::info!("Detecting data bounds for tables: {:?}", self.config.geometry.tables);
         
-        // Build UNION query for all configured geometry tables
-        let mut union_parts = Vec::new();
+        // Build query to get extent from each table separately, then combine
+        let mut extent_parts = Vec::new();
         
         for table in &self.config.geometry.tables {
             let qualified_table = format!("{}.{}", self.config.geometry.schema, table);
-            union_parts.push(format!(
-                "SELECT {} FROM {} WHERE {} IS NOT NULL",
+            extent_parts.push(format!(
+                "SELECT ST_Transform(ST_SetSRID(ST_Extent({}), 3857), 4326) as bounds FROM {} WHERE {} IS NOT NULL",
                 self.config.geometry.geometry_column,
                 qualified_table,
                 self.config.geometry.geometry_column
             ));
         }
         
-        let union_query = union_parts.join(" UNION ALL ");
-        
         let bounds_query = format!(
             r#"
-            WITH all_geometries AS ({})
+            WITH table_extents AS ({})
             SELECT 
-                ST_XMin(bounds) as min_lon,
-                ST_YMin(bounds) as min_lat,
-                ST_XMax(bounds) as max_lon,
-                ST_YMax(bounds) as max_lat
+                ST_XMin(combined_bounds) as min_lon,
+                ST_YMin(combined_bounds) as min_lat,
+                ST_XMax(combined_bounds) as max_lon,
+                ST_YMax(combined_bounds) as max_lat
             FROM (
-                SELECT ST_Transform(ST_SetSRID(ST_Extent({}), 3857), 4326) as bounds
-                FROM all_geometries
-            ) extent
+                SELECT ST_Extent(bounds) as combined_bounds
+                FROM table_extents
+                WHERE bounds IS NOT NULL
+            ) final_extent
             "#,
-            union_query,
-            self.config.geometry.geometry_column
+            extent_parts.join(" UNION ALL ")
         );
         
         tracing::debug!("Bounds detection query: {}", bounds_query);
