@@ -58,29 +58,14 @@ impl NotificationListener {
 
     /// Wait for the next notification with a timeout
     pub async fn wait_for_notification(&mut self, timeout_duration: Duration) -> Result<Option<TileNotification>> {
-        // For tokio-postgres, we need to implement notification listening differently
-        // This is a simplified version - in practice you'd use a connection stream
-        match timeout(timeout_duration, async {
-            loop {
-                // Check for notifications (this would be handled by the connection in practice)
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                // This is a placeholder - the actual implementation would use
-                // the connection's notification stream
-                return Ok::<(), tokio_postgres::Error>(());
-            }
-        }).await {
-            Ok(_) => {
-                // For now, return None (no notification received)
-                // TODO: Implement proper notification handling
-                debug!("Notification timeout after {:?}", timeout_duration);
-                Ok(None)
-            }
-            Err(_) => {
-                // Timeout occurred
-                debug!("Notification timeout after {:?}", timeout_duration);
-                Ok(None)
-            }
-        }
+        // Simple timeout implementation - just wait for the full duration
+        // In a real implementation, this would listen for actual PostgreSQL NOTIFY events
+        debug!("Waiting for notifications or timeout after {:?}", timeout_duration);
+        
+        tokio::time::sleep(timeout_duration).await;
+        
+        debug!("Notification timeout after {:?}", timeout_duration);
+        Ok(None) // Always timeout for now - notification handling is simplified
     }
 
 

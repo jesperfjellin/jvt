@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS changed_tiles (
     source_table TEXT,
     operation TEXT, -- INSERT, UPDATE, DELETE
     
-    UNIQUE(z, x, y, processed_at) -- Allow same tile multiple times if not processed
+    -- Note: Unique constraint on unprocessed tiles is created as a partial index below
 );
 
 -- Indexes for efficient querying
@@ -22,6 +22,11 @@ ON changed_tiles(changed_at) WHERE processed_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_changed_tiles_zxy 
 ON changed_tiles(z, x, y);
+
+-- Unique constraint: only one unprocessed tile per coordinate (prevents duplicates)
+CREATE UNIQUE INDEX IF NOT EXISTS changed_tiles_z_x_y_unprocessed_unique 
+ON changed_tiles(z, x, y) 
+WHERE processed_at IS NULL;
 
 -- Function to calculate which tiles are affected by a geometry change
 CREATE OR REPLACE FUNCTION calculate_affected_tiles(
@@ -103,7 +108,11 @@ BEGIN
         INSERT INTO changed_tiles (z, x, y, source_table, operation)
         SELECT t.z, t.x, t.y, table_name, operation_type
         FROM calculate_affected_tiles(geom_to_process) t
-        ON CONFLICT (z, x, y, processed_at) DO NOTHING; -- Avoid duplicates
+        WHERE NOT EXISTS (
+            SELECT 1 FROM changed_tiles ct 
+            WHERE ct.z = t.z AND ct.x = t.x AND ct.y = t.y 
+            AND ct.processed_at IS NULL
+        ); -- Avoid duplicates of unprocessed tiles
         
         -- Send notification that tiles have changed
         PERFORM pg_notify('tiles_updated', 
