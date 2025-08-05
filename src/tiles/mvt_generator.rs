@@ -37,8 +37,8 @@ impl MvtGenerator {
             WITH bounds AS (
                 SELECT ST_TileEnvelope($1, $2, $3) AS geom
             )
-            SELECT ST_AsMVT(q, 'demo', 4096) AS mvt
-            FROM (
+            SELECT COALESCE(
+                (SELECT ST_AsMVT(q, 'demo', 4096) FROM (
                 SELECT 
                     demo_points.id,
                     demo_points.demo_tag,
@@ -65,7 +65,7 @@ impl MvtGenerator {
                 FROM demo_polygons, bounds
                 WHERE demo_polygons.geom && bounds.geom
                     AND ST_Intersects(demo_polygons.geom, bounds.geom)
-            ) AS q
+                ) AS q), ''::bytea) AS mvt
         ";
 
         let result = self
@@ -97,8 +97,15 @@ impl MvtGenerator {
                 }
             }
             Err(e) => {
-                tracing::error!("Failed to generate MVT tile {}: {}", coord.to_string(), e);
-                Err(anyhow::anyhow!("Database error: {}", e))
+                // Check if this is just an empty tile (no geometry data)
+                let error_msg = e.to_string();
+                if error_msg.contains("query_one failed") || error_msg.contains("no rows") {
+                    tracing::debug!("Tile {} has no geometry data, returning empty tile", coord.to_string());
+                    Ok(vec![])
+                } else {
+                    tracing::warn!("Failed to generate MVT tile {}: {}", coord.to_string(), e);
+                    Err(anyhow::anyhow!("Database error: {}", e))
+                }
             }
         }
     }
@@ -114,7 +121,13 @@ impl MvtGenerator {
                     results.push((coord.clone(), tile_data));
                 }
                 Err(e) => {
-                    tracing::error!("Failed to generate tile {}: {}", coord.to_string(), e);
+                    // Check if this is just an empty tile (no geometry data)
+                    let error_msg = e.to_string();
+                    if error_msg.contains("query_one failed") || error_msg.contains("no rows") {
+                        tracing::debug!("Tile {} has no geometry data, generating empty tile", coord.to_string());
+                    } else {
+                        tracing::warn!("Failed to generate tile {}: {}", coord.to_string(), e);
+                    }
                     // Continue with other tiles instead of failing the entire batch
                     // Add an empty tile to keep the batch size consistent
                     results.push((coord.clone(), vec![]));
