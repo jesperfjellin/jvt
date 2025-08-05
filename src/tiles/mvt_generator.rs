@@ -40,31 +40,31 @@ impl MvtGenerator {
             SELECT ST_AsMVT(q, 'demo', 4096) AS mvt
             FROM (
                 SELECT 
-                    id,
-                    demo_tag,
+                    demo_points.id,
+                    demo_points.demo_tag,
                     'point' AS type,
-                    ST_AsMVTGeom(geom, bounds.geom, 4096, 256, true) AS geom
+                    ST_AsMVTGeom(demo_points.geom, bounds.geom, 4096, 256, true) AS geom
                 FROM demo_points, bounds
-                WHERE geom && bounds.geom
-                    AND ST_Intersects(geom, bounds.geom)
+                WHERE demo_points.geom && bounds.geom
+                    AND ST_Intersects(demo_points.geom, bounds.geom)
                 UNION ALL
                 SELECT 
-                    id,
-                    demo_tag,
+                    demo_lines.id,
+                    demo_lines.demo_tag,
                     'line' AS type,
-                    ST_AsMVTGeom(geom, bounds.geom, 4096, 256, true) AS geom
+                    ST_AsMVTGeom(demo_lines.geom, bounds.geom, 4096, 256, true) AS geom
                 FROM demo_lines, bounds
-                WHERE geom && bounds.geom
-                    AND ST_Intersects(geom, bounds.geom)
+                WHERE demo_lines.geom && bounds.geom
+                    AND ST_Intersects(demo_lines.geom, bounds.geom)
                 UNION ALL
                 SELECT 
-                    id,
-                    demo_tag,
+                    demo_polygons.id,
+                    demo_polygons.demo_tag,
                     'polygon' AS type,
-                    ST_AsMVTGeom(geom, bounds.geom, 4096, 256, true) AS geom
+                    ST_AsMVTGeom(demo_polygons.geom, bounds.geom, 4096, 256, true) AS geom
                 FROM demo_polygons, bounds
-                WHERE geom && bounds.geom
-                    AND ST_Intersects(geom, bounds.geom)
+                WHERE demo_polygons.geom && bounds.geom
+                    AND ST_Intersects(demo_polygons.geom, bounds.geom)
             ) AS q
         ";
 
@@ -72,7 +72,7 @@ impl MvtGenerator {
             .database
             .query_one(
                 mvt_query,
-                &[&(coord.z as i32), &(coord.x as i32), &(coord.y as i32)],
+                &[&(coord.z as i16), &(coord.x as i32), &(coord.y as i32)],
             )
             .await;
 

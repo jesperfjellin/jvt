@@ -22,7 +22,6 @@ const Map: React.FC = () => {
   const mapContainer = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const [tileStatus, setTileStatus] = useState<TileStatusResponse | null>(null)
-  const [loading, setLoading] = useState(true)
 
   // Fetch tile status from API
   const fetchTileStatus = async () => {
@@ -31,7 +30,6 @@ const Map: React.FC = () => {
       if (response.ok) {
         const data: TileStatusResponse = await response.json()
         setTileStatus(data)
-        setLoading(false)
         console.log(`Fetched tile status: ${data.fresh_count} fresh, ${data.stale_count} stale`)
       } else {
         console.error('Failed to fetch tile status:', response.status)
@@ -173,7 +171,7 @@ const Map: React.FC = () => {
       fetchTileStatus()
     })
 
-    mapRef.current.on('error', (e) => {
+    mapRef.current.on('error', (e: any) => {
       console.error('Map error:', e)
     })
 
@@ -199,28 +197,8 @@ const Map: React.FC = () => {
   }, [])
 
   return (
-    <div className="map-container">
+    <div className="map-component">
       <div ref={mapContainer} className="map" />
-      <div className="map-overlay">
-        <div className="map-info">
-          <p><strong>JVT Tile Status</strong></p>
-          {loading ? (
-            <p>Loading tile status...</p>
-          ) : tileStatus ? (
-            <>
-              <p><strong>Fresh:</strong> <span style={{color: '#00aa00'}}>{tileStatus.fresh_count} tiles</span></p>
-              <p><strong>Stale:</strong> <span style={{color: '#aa0000'}}>{tileStatus.stale_count} tiles</span></p>
-              <p><strong>Last Check:</strong> {new Date(tileStatus.last_check).toLocaleTimeString()}</p>
-              <p style={{fontSize: '0.8rem', opacity: 0.8}}>
-                Green = Updated &lt;5min ago<br/>
-                Red = Older than 5min
-              </p>
-            </>
-          ) : (
-            <p>No tile data available</p>
-          )}
-        </div>
-      </div>
     </div>
   )
 }

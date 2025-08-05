@@ -42,18 +42,25 @@ docker-compose up jvt-worker -d
 docker-compose logs -f jvt-worker
 ```
 
-### 5. Test Data Pipeline
+### 5. Monitor the Pipeline
+
+The system automatically:
+- Creates initial global data on startup
+- Simulates data changes every 5 minutes
+- Processes tiles every 5 minutes when changes occur
 
 ```bash
-# Run the test data pipeline to simulate changes
-docker-compose exec jvt-worker /usr/local/bin/test_data_pipeline.sh
+# Monitor logs
+docker-compose logs -f jvt-worker
+docker-compose logs -f jvt-data-simulator
 ```
 
 ## Architecture
 
-- **PostGIS Database**: Stores OSM Norway data with change detection triggers
+- **PostGIS Database**: Stores synthetic global demo data with change detection triggers  
 - **Database Triggers**: Automatically detect changes and queue tiles for regeneration
-- **Rust Worker**: Listens for database notifications and generates vector tiles
+- **Rust Worker**: Processes tiles every 5 minutes and generates vector tiles
+- **Data Simulator**: Creates data changes every 5 minutes to demonstrate the pipeline
 - **PMTiles Archive**: Incremental tile storage that grows over time
 
 ## Storage Layout

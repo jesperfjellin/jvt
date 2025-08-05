@@ -53,8 +53,8 @@ impl DatabaseTileProcessor {
     pub async fn get_pending_tiles(&self) -> Result<TileBatch> {
         debug!("Fetching pending tiles batch from database");
 
-        // Process tiles in batches of 1000 to avoid overwhelming the system
-        let batch_size = 1000i32;
+        // Process tiles in batches of 5000 for better efficiency while keeping memory usage reasonable
+        let batch_size = 5000i32;
         let query = "SELECT z, x, y, count FROM get_pending_tiles($1)";
         let rows = self
             .database
@@ -66,7 +66,7 @@ impl DatabaseTileProcessor {
         let mut tile_set = HashSet::new();
 
         for row in rows {
-            let z: i32 = row.get(0);
+            let z: i16 = row.get(0);
             let x: i32 = row.get(1);
             let y: i32 = row.get(2);
             let change_count: i64 = row.get(3);
@@ -116,7 +116,7 @@ impl DatabaseTileProcessor {
                 .database
                 .execute(
                     query,
-                    &[&(coord.z as i32), &(coord.x as i32), &(coord.y as i32)],
+                    &[&(coord.z as i16), &(coord.x as i32), &(coord.y as i32)],
                 )
                 .await
                 .context("Failed to mark tile as processed")?;

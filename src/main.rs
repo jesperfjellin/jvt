@@ -104,7 +104,7 @@ fn init_logging() -> Result<()> {
     Ok(())
 }
 
-/// Main worker loop - batched processing every 5 minutes
+/// Main worker loop - batched processing every 5 minutes with file lock coordination
 async fn run_worker_loop(
     listener: &mut NotificationListener,
     processor: &DatabaseTileProcessor,
@@ -113,7 +113,7 @@ async fn run_worker_loop(
     config: &Config,
 ) -> Result<()> {
     info!(
-        "Starting batched worker loop (processes tiles every {}s)",
+        "Starting batched worker loop (processes tiles every {}s with file lock coordination)",
         config.worker.batch_timeout_secs
     );
 
@@ -135,6 +135,17 @@ async fn run_worker_loop(
                 // Timeout occurred - time to process pending tiles!
                 info!("5-minute timer expired, processing pending tiles...");
 
+                // Wait for data generation to complete before processing tiles
+                while std::path::Path::new("/tmp/data_generation_in_progress").exists() {
+                    info!("Waiting for data generation to complete...");
+                    sleep(Duration::from_secs(30)).await;
+                }
+
+                // Create tile processing lock
+                if let Err(e) = std::fs::write("/tmp/tile_processing_in_progress", "") {
+                    warn!("Failed to create tile processing lock: {}", e);
+                }
+
                 match process_pending_tiles_batch(processor, mvt_generator, pmtiles_writer).await {
                     Ok(processed_count) => {
                         if processed_count > 0 {
@@ -148,6 +159,16 @@ async fn run_worker_loop(
                         // Continue loop - don't exit on processing errors
                     }
                 }
+
+                // Release tile processing lock
+                if let Err(e) = std::fs::remove_file("/tmp/tile_processing_in_progress") {
+                    warn!("Failed to remove tile processing lock: {}", e);
+                }
+                
+                // Signal completion
+                if let Err(e) = std::fs::write("/tmp/tile_processing_complete", "") {
+                    warn!("Failed to create tile processing completion signal: {}", e);
+                }
             }
             Err(e) => {
                 error!("Error waiting for notification: {}", e);
@@ -158,39 +179,56 @@ async fn run_worker_loop(
     }
 }
 
-/// Process all pending tiles in one batch (called every 5 minutes)
+/// Process all pending tiles in batches (called every 5 minutes)
 async fn process_pending_tiles_batch(
     processor: &DatabaseTileProcessor,
     mvt_generator: &MvtGenerator,
     pmtiles_writer: &mut PmtilesWriter,
 ) -> Result<usize> {
-    // Get all pending tiles from the database
-    let batch = processor.get_pending_tiles().await?;
+    let mut total_processed = 0;
+    let mut batch_count = 0;
+    
+    loop {
+        // Get next batch of pending tiles from the database
+        let batch = processor.get_pending_tiles().await?;
 
-    if batch.is_empty() {
-        return Ok(0);
+        if batch.is_empty() {
+            break;
+        }
+
+        batch_count += 1;
+        let summary = batch.summary();
+        info!("Processing tile batch #{}: {}", batch_count, summary);
+
+        // Convert batch tiles to a vector for MVT generation
+        let tile_coords: Vec<_> = batch.tiles.iter().cloned().collect();
+
+        // Generate MVT tiles for all changed coordinates
+        info!("Generating {} MVT tiles...", tile_coords.len());
+        let tile_data = mvt_generator.generate_tiles(&tile_coords).await?;
+
+        // Update PMTiles archive with new tiles
+        info!("Updating PMTiles archive with {} tiles...", tile_data.len());
+        pmtiles_writer.write_tiles(&tile_data).await?;
+
+        // Mark tiles as processed in database
+        processor.mark_tiles_processed(&batch).await?;
+
+        total_processed += batch.len();
+        info!("Completed batch #{} with {} tiles (total: {})", batch_count, batch.len(), total_processed);
+
+        // Safety check: if we've processed more than 100k tiles in one cycle, something might be wrong
+        if total_processed > 100_000 {
+            warn!("Processed {} tiles in one cycle - stopping to prevent runaway processing", total_processed);
+            break;
+        }
     }
 
-    let summary = batch.summary();
-    info!("Processing tile batch: {}", summary);
+    if total_processed > 0 {
+        info!("Completed processing session: {} total tiles in {} batches", total_processed, batch_count);
+    }
 
-    // Convert batch tiles to a vector for MVT generation
-    let tile_coords: Vec<_> = batch.tiles.iter().cloned().collect();
-
-    // Generate MVT tiles for all changed coordinates
-    info!("Generating {} MVT tiles...", tile_coords.len());
-    let tile_data = mvt_generator.generate_tiles(&tile_coords).await?;
-
-    // Update PMTiles archive with new tiles
-    info!("Updating PMTiles archive with {} tiles...", tile_data.len());
-    pmtiles_writer.write_tiles(&tile_data).await?;
-
-    // Mark tiles as processed in database
-    processor.mark_tiles_processed(&batch).await?;
-
-    info!("Completed processing {} tiles in batch", batch.len());
-
-    Ok(batch.len())
+    Ok(total_processed)
 }
 
 /// Log worker status during idle periods

@@ -1,56 +1,81 @@
--- Change Detection Triggers for Synthetic Schema
--- Much simpler than OSM version - clean and focused
+/***********************************************************************
+  02-synthetic-triggers.sql
+  ----------------------------------------------------------------------
+  Change-detection triggers for the synthetic JVT schema.
+  • A single PL/pgSQL function (`track_synthetic_changes`) is attached to
+    the three demo tables.
+  • One *unprocessed* row per (z,x,y) tile is kept in `changed_tiles`
+    regardless of how many DML events hit that tile.  If the same tile
+    changes again before the worker processes it, we just “bump” the
+    row’s timestamp and clear `processed_at`.
+***********************************************************************/
 
--- Generic change tracking function for all synthetic tables
-CREATE OR REPLACE FUNCTION track_synthetic_changes() 
+-----------------------------------------------------------------------
+--  Ensure we have ONE unconditional UNIQUE index on (z,x,y)
+--  (the old partial-unique index on processed_at is now obsolete)
+-----------------------------------------------------------------------
+DROP INDEX IF EXISTS changed_tiles_z_x_y_unprocessed_unique;
+CREATE UNIQUE INDEX IF NOT EXISTS changed_tiles_zxy_unique
+ON changed_tiles (z, x, y);
+
+-----------------------------------------------------------------------
+--  Change-tracking function
+-----------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION track_synthetic_changes()
 RETURNS TRIGGER AS $$
 DECLARE
-    geom_to_process geometry;
-    table_name text;
-    operation_type text;
-    tiles_affected integer := 0;
+    geom_to_process GEOMETRY;
+    table_name      TEXT;
+    operation_type  TEXT;
+    tiles_affected  INT := 0;
 BEGIN
-    -- Get table name and operation type
-    table_name := TG_TABLE_NAME;
+    -- identify source table & operation
+    table_name     := TG_TABLE_NAME;
     operation_type := TG_OP;
-    
-    -- Determine which geometry to process
+
+    -- which geometry to inspect?
     IF TG_OP = 'DELETE' THEN
         geom_to_process := OLD.geom;
     ELSE
         geom_to_process := NEW.geom;
     END IF;
-    
-    -- Only process if we have valid geometry
+
     IF geom_to_process IS NOT NULL THEN
-        -- Insert affected tiles into changed_tiles table
-        INSERT INTO changed_tiles (z, x, y, source_table, operation)
-        SELECT t.z, t.x, t.y, table_name, operation_type
-        FROM calculate_affected_tiles_synthetic(geom_to_process, 8, 8) t  -- Only z8 for demo
-        WHERE NOT EXISTS (
-            SELECT 1 FROM changed_tiles ct 
-            WHERE ct.z = t.z AND ct.x = t.x AND ct.y = t.y 
-            AND ct.processed_at IS NULL
-        ); -- Avoid duplicates of unprocessed tiles
-        
-        -- Count how many tiles were affected
+        ----------------------------------------------------------------
+        --  UPSERT each affected tile into changed_tiles
+        ----------------------------------------------------------------
+        INSERT INTO changed_tiles (z, x, y,
+                                   source_table, operation,
+                                   changed_at,    processed_at)
+        SELECT  t.z, t.x, t.y,
+                table_name, operation_type,
+                NOW(),      NULL                 -- mark as “pending”
+        FROM   calculate_affected_tiles_synthetic(geom_to_process, 8, 8) AS t
+        ON CONFLICT (z, x, y)               -- same tile already queued
+        DO UPDATE
+           SET changed_at   = EXCLUDED.changed_at,   -- bump timestamp
+               source_table = EXCLUDED.source_table,
+               operation    = EXCLUDED.operation,
+               processed_at = NULL;                  -- ensure pending
+
         GET DIAGNOSTICS tiles_affected = ROW_COUNT;
-        
-        -- Send simple notification that tiles have changed
-        PERFORM pg_notify('tiles_updated', 
+
+        -- send NOTIFY for the Rust worker (optional, still nice to have)
+        PERFORM pg_notify(
+            'tiles_updated',
             json_build_object(
-                'table', table_name,
-                'operation', operation_type,
+                'table',      table_name,
+                'operation',  operation_type,
                 'tile_count', tiles_affected,
-                'timestamp', extract(epoch from now())
-            )::text
+                'timestamp',  extract(epoch FROM now())
+            )::TEXT
         );
-        
-        -- Log the change for debugging
-        RAISE DEBUG 'Synthetic change: % % affected % tiles', operation_type, table_name, tiles_affected;
+
+        RAISE DEBUG 'Synthetic change: % % affected % tiles',
+                    operation_type, table_name, tiles_affected;
     END IF;
-    
-    -- Return appropriate value based on operation
+
+    -- return the correct row for the DML operation
     IF TG_OP = 'DELETE' THEN
         RETURN OLD;
     ELSE
@@ -59,135 +84,95 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Create triggers for all synthetic tables
--- Much cleaner than OSM - just 3 triggers instead of 4+!
+-----------------------------------------------------------------------
+--  Attach the trigger to each synthetic layer
+-----------------------------------------------------------------------
+DROP TRIGGER IF EXISTS demo_points_changes   ON demo_points;
+DROP TRIGGER IF EXISTS demo_lines_changes    ON demo_lines;
+DROP TRIGGER IF EXISTS demo_polygons_changes ON demo_polygons;
 
-DROP TRIGGER IF EXISTS demo_points_changes ON demo_points;
 CREATE TRIGGER demo_points_changes
     AFTER INSERT OR UPDATE OR DELETE ON demo_points
     FOR EACH ROW EXECUTE FUNCTION track_synthetic_changes();
 
-DROP TRIGGER IF EXISTS demo_lines_changes ON demo_lines;
 CREATE TRIGGER demo_lines_changes
     AFTER INSERT OR UPDATE OR DELETE ON demo_lines
     FOR EACH ROW EXECUTE FUNCTION track_synthetic_changes();
 
-DROP TRIGGER IF EXISTS demo_polygons_changes ON demo_polygons;
 CREATE TRIGGER demo_polygons_changes
     AFTER INSERT OR UPDATE OR DELETE ON demo_polygons
     FOR EACH ROW EXECUTE FUNCTION track_synthetic_changes();
 
--- Helper function to clear old test data (useful for resetting demo)
-CREATE OR REPLACE FUNCTION reset_synthetic_demo() 
-RETURNS void AS $$
+-----------------------------------------------------------------------
+--  reset_synthetic_demo(): quick wipe of all demo data (unchanged)
+-----------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION reset_synthetic_demo()
+RETURNS VOID AS $$
 BEGIN
-    -- Clear all synthetic data
-    TRUNCATE TABLE demo_points CASCADE;
-    TRUNCATE TABLE demo_lines CASCADE; 
-    TRUNCATE TABLE demo_polygons CASCADE;
-    TRUNCATE TABLE changed_tiles CASCADE;
+    TRUNCATE TABLE demo_points    CASCADE;
+    TRUNCATE TABLE demo_lines     CASCADE;
+    TRUNCATE TABLE demo_polygons  CASCADE;
+    TRUNCATE TABLE changed_tiles  CASCADE;
     TRUNCATE TABLE changed_tile_batches CASCADE;
-    
-    -- Reset sequences
-    ALTER SEQUENCE demo_points_id_seq RESTART WITH 1;
-    ALTER SEQUENCE demo_lines_id_seq RESTART WITH 1;
-    ALTER SEQUENCE demo_polygons_id_seq RESTART WITH 1;
-    ALTER SEQUENCE changed_tiles_id_seq RESTART WITH 1;
+
+    ALTER SEQUENCE demo_points_id_seq         RESTART WITH 1;
+    ALTER SEQUENCE demo_lines_id_seq          RESTART WITH 1;
+    ALTER SEQUENCE demo_polygons_id_seq       RESTART WITH 1;
+    ALTER SEQUENCE changed_tiles_id_seq       RESTART WITH 1;
     ALTER SEQUENCE changed_tile_batches_id_seq RESTART WITH 1;
-    
+
     RAISE NOTICE 'Synthetic demo data reset complete';
 END;
 $$ LANGUAGE plpgsql;
 
--- Function to generate simple test geometry for a given tile
+-----------------------------------------------------------------------
+--  generate_tile_test_data(): helper for ad-hoc inserts (unchanged)
+-----------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION generate_tile_test_data(
-    tile_x integer,
-    tile_y integer,
-    tile_z integer DEFAULT 8,
-    points_per_tile integer DEFAULT 2
-) RETURNS void AS $$
+    tile_x           INT,
+    tile_y           INT,
+    tile_z           INT DEFAULT 8,
+    points_per_tile  INT DEFAULT 2
+) RETURNS VOID AS $$
 DECLARE
-    -- Tile bounds in Web Mercator
-    tile_bounds geometry;
-    center_point geometry;
-    random_point geometry;
-    random_line geometry;
-    random_polygon geometry;
-    i integer;
-    inserted_points integer := 0;
-    inserted_lines integer := 0;
-    inserted_polygons integer := 0;
+    tile_bounds     GEOMETRY;
+    center_point    GEOMETRY;
+    random_point    GEOMETRY;
+    random_line     GEOMETRY;
+    random_polygon  GEOMETRY;
+    i               INT;
 BEGIN
-    -- Calculate tile bounds in Web Mercator (3857)
-    BEGIN
-        tile_bounds := ST_TileEnvelope(tile_z, tile_x, tile_y);
-        center_point := ST_Centroid(tile_bounds);
-        
-        IF tile_bounds IS NULL OR center_point IS NULL THEN
-            RAISE EXCEPTION 'Failed to calculate tile bounds for tile %,% at zoom %', tile_x, tile_y, tile_z;
-        END IF;
-    EXCEPTION
-        WHEN OTHERS THEN
-            RAISE EXCEPTION 'Error calculating tile envelope: %', SQLERRM;
-    END;
-    
-    -- Generate random points within the tile
+    tile_bounds  := ST_TileEnvelope(tile_z, tile_x, tile_y);
+    center_point := ST_Centroid(tile_bounds);
+
+    -- Points
     FOR i IN 1..points_per_tile LOOP
-        BEGIN
-            -- Use a simpler approach: random point within tile bounds
-            random_point := ST_SetSRID(
-                ST_MakePoint(
-                    ST_XMin(tile_bounds) + random() * (ST_XMax(tile_bounds) - ST_XMin(tile_bounds)),
-                    ST_YMin(tile_bounds) + random() * (ST_YMax(tile_bounds) - ST_YMin(tile_bounds))
-                ), 
-                3857
-            );
-            
-            INSERT INTO demo_points (geom, demo_tag) 
-            VALUES (random_point, format('tile_%s_%s_point_%s', tile_x, tile_y, i));
-            inserted_points := inserted_points + 1;
-        EXCEPTION
-            WHEN OTHERS THEN
-                RAISE WARNING 'Failed to insert point % for tile %,%: %', i, tile_x, tile_y, SQLERRM;
-        END;
+        random_point := ST_SetSRID(
+            ST_MakePoint(
+                ST_XMin(tile_bounds) + random() * (ST_XMax(tile_bounds)-ST_XMin(tile_bounds)),
+                ST_YMin(tile_bounds) + random() * (ST_YMax(tile_bounds)-ST_YMin(tile_bounds))
+            ), 3857);
+        INSERT INTO demo_points (geom, demo_tag)
+        VALUES (random_point,
+                format('tile_%s_%s_point_%s', tile_x, tile_y, i));
     END LOOP;
-    
-    -- Generate a simple line across the tile
-    BEGIN
-        random_line := ST_MakeLine(
-            ST_SetSRID(ST_MakePoint(ST_XMin(tile_bounds), ST_YMin(tile_bounds)), 3857),
-            ST_SetSRID(ST_MakePoint(ST_XMax(tile_bounds), ST_YMax(tile_bounds)), 3857)
-        );
-        INSERT INTO demo_lines (geom, demo_tag) 
-        VALUES (random_line, format('tile_%s_%s_line', tile_x, tile_y));
-        inserted_lines := inserted_lines + 1;
-    EXCEPTION
-        WHEN OTHERS THEN
-            RAISE WARNING 'Failed to insert line for tile %,%: %', tile_x, tile_y, SQLERRM;
-    END;
-    
-    -- Generate a simple polygon (small box within tile)
-    BEGIN
-        random_polygon := ST_Buffer(center_point, 
-            LEAST(ST_XMax(tile_bounds) - ST_XMin(tile_bounds), 
-                  ST_YMax(tile_bounds) - ST_YMin(tile_bounds)) * 0.1);
-        INSERT INTO demo_polygons (geom, demo_tag) 
-        VALUES (random_polygon, format('tile_%s_%s_polygon', tile_x, tile_y));
-        inserted_polygons := inserted_polygons + 1;
-    EXCEPTION
-        WHEN OTHERS THEN
-            RAISE WARNING 'Failed to insert polygon for tile %,%: %', tile_x, tile_y, SQLERRM;
-    END;
-    
-    -- Debug output for first few tiles
-    IF tile_x < 2 AND tile_y < 52 THEN
-        RAISE NOTICE 'Tile %,% generated: % points, % lines, % polygons', 
-            tile_x, tile_y, inserted_points, inserted_lines, inserted_polygons;
-    END IF;
-    
+
+    -- Line
+    random_line := ST_MakeLine(
+        ST_Translate(center_point, -5000, -5000),
+        ST_Translate(center_point,  5000,  5000));
+    INSERT INTO demo_lines (geom, demo_tag)
+    VALUES (random_line, format('tile_%s_%s_line', tile_x, tile_y));
+
+    -- Polygon
+    random_polygon := ST_Buffer(center_point, 3000);
+    INSERT INTO demo_polygons (geom, demo_tag)
+    VALUES (random_polygon,
+            format('tile_%s_%s_polygon', tile_x, tile_y));
 END;
 $$ LANGUAGE plpgsql;
 
--- Initialize notification channel
--- The Rust worker will LISTEN on this channel
+-----------------------------------------------------------------------
+--  Initialise NOTIFY channel (unchanged)
+-----------------------------------------------------------------------
 LISTEN tiles_updated;

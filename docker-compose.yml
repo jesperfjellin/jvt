@@ -27,10 +27,11 @@ services:
       -c effective_io_concurrency=200
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d gis"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      test: ["CMD-SHELL", "pg_isready -U postgres -d gis > /dev/null 2>&1 && psql -U postgres -d gis -c 'SELECT 1 FROM initial_data_complete LIMIT 1' > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 40
+      start_period: 300s
 
   jvt-worker:
     build: .
@@ -70,9 +71,17 @@ services:
       - ./scripts:/usr/local/scripts:ro
     command: >
       bash -c "
-      echo '[$(date)] Starting continuous data simulation...' >> /var/log/tiles/data-simulation.log;
-      while true; do /usr/local/scripts/test_data_pipeline.sh >> /var/log/tiles/data-simulation.log 2>&1;
-      echo '[$(date)] Sleeping 60 seconds...' >> /var/log/tiles/data-simulation.log; sleep 60; done
+      echo '[$(date)] Starting rotating 5% tile simulation...' >> /var/log/tiles/data-simulation.log;
+      echo '[$(date)] Waiting 120 seconds for worker startup...' >> /var/log/tiles/data-simulation.log;
+      sleep 120;
+      while true; do 
+        echo '[$(date)] Starting 5% tile cycle (targeting different tiles each time)...' >> /var/log/tiles/data-simulation.log;
+        /usr/local/scripts/synthetic_change_simulator.sh >> /var/log/tiles/data-simulation.log 2>&1;
+        echo '[$(date)] Data cycle complete. Waiting for tile processing...' >> /var/log/tiles/data-simulation.log;
+        while [ -f '/tmp/tile_processing_in_progress' ]; do sleep 15; done;
+        echo '[$(date)] Sleeping 360 seconds (6 minutes) before next 5% cycle...' >> /var/log/tiles/data-simulation.log; 
+        sleep 360; 
+      done
       "
 
     restart: unless-stopped
