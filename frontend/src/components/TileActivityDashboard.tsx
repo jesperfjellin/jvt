@@ -243,9 +243,7 @@ const TileActivityDashboard: React.FC = () => {
 
   // Fetch initial data and set up polling
   useEffect(() => {
-    fetchTileStatus()
-    const interval = setInterval(fetchTileStatus, 15000)
-    return () => clearInterval(interval)
+    fetchTileStatus() // Fetch initial data only
   }, [])
 
   const formatTime = (ms: number): string => {

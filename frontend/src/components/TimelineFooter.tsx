@@ -22,9 +22,7 @@ export default function TimelineFooter() {
         console.error('Failed to fetch tile status:', error)
       }
     }
-    fetcher()
-    const id = setInterval(fetcher, 60_000)
-    return () => clearInterval(id)
+    fetcher() // Fetch initial data only
   }, [])
 
   return (

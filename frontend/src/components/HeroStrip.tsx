@@ -21,9 +21,7 @@ export default function HeroStrip() {
         })
       }
     }
-    fetcher()
-    const id = setInterval(fetcher, 15_000)
-    return () => clearInterval(id)
+    fetcher() // Fetch initial data only
   }, [])
 
   return (

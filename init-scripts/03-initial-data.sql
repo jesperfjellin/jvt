@@ -92,13 +92,10 @@ SELECT  -- progress notice
 SET session_replication_role = DEFAULT;
 
 -----------------------------
---  5.  Seed changed_tiles
---      (one row per z8 tile)
+--  5.  No initial tile seeding
+--      (tiles will be generated on-demand via user simulation)
 -----------------------------
-INSERT INTO changed_tiles (z, x, y, source_table, operation)
-SELECT 8, x, y, 'baseline_loader', 'INSERT'
-FROM   generate_series(0,255) AS x
-CROSS  JOIN generate_series(0,255) AS y;
+-- Removed: Initial seeding of all tiles to allow clean startup
 
 -----------------------------
 --  6.  Completion marker

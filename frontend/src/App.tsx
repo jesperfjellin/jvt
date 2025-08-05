@@ -11,23 +11,25 @@ interface TileStatus {
 
 function App() {
   const [tileStatus, setTileStatus] = useState<TileStatus | null>(null)
+  const [simulationPercentage, setSimulationPercentage] = useState(7.5)
+  const [isSimulating, setIsSimulating] = useState(false)
+  const [mapRefreshTrigger, setMapRefreshTrigger] = useState(0)
+
+  const fetchData = async () => {
+    try {
+      const tileRes = await fetch('http://localhost:8080/api/tile-status')
+      if (tileRes.ok) {
+        const tileData = await tileRes.json()
+        setTileStatus(tileData)
+      }
+    } catch (error) {
+      console.error('Error fetching data:', error)
+    }
+  }
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const tileRes = await fetch('http://localhost:8080/api/tile-status')
-        if (tileRes.ok) {
-          const tileData = await tileRes.json()
-          setTileStatus(tileData)
-        }
-      } catch (error) {
-        console.error('Error fetching data:', error)
-      }
-    }
-
+    // Fetch initial data on component mount
     fetchData()
-    const interval = setInterval(fetchData, 15000)
-    return () => clearInterval(interval)
   }, [])
 
   const formatTime = (freshCount: number) => {
@@ -53,6 +55,34 @@ function App() {
 
   const { timeRatio } = getEfficiencyRatio()
   const processingTime = tileStatus ? formatTime(tileStatus.fresh_count) : '—'
+
+  const runSimulation = async () => {
+    setIsSimulating(true)
+    try {
+      const response = await fetch('http://localhost:8080/api/simulate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ percentage: simulationPercentage }),
+      })
+
+      if (response.ok) {
+        console.log(`Started simulation with ${simulationPercentage}% of tiles`)
+        // Refresh both main data and map after simulation completes
+        setTimeout(() => {
+          fetchData()
+          setMapRefreshTrigger(Date.now())
+        }, 3000)
+      } else {
+        console.error('Failed to start simulation:', response.status)
+      }
+    } catch (error) {
+      console.error('Error starting simulation:', error)
+    } finally {
+      setIsSimulating(false)
+    }
+  }
 
   return (
     /* ------------------------------------------------------------------ */
@@ -196,6 +226,49 @@ function App() {
               </div>
             </div>
 
+            {/* Simulation Controls */}
+            <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 mb-6">
+              <div className="text-sm font-medium text-white mb-3">
+                Interactive Tile Simulation
+              </div>
+
+              <div className="space-y-4">
+                {/* Percentage Slider */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-xs text-slate-300">
+                      Regeneration Percentage
+                    </label>
+                    <span className="text-sm font-medium text-white">
+                      {simulationPercentage.toFixed(1)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="100"
+                    step="0.5"
+                    value={simulationPercentage}
+                    onChange={(e) => setSimulationPercentage(parseFloat(e.target.value))}
+                    className="w-full h-2 bg-white/20 rounded-lg appearance-none cursor-pointer slider"
+                    disabled={isSimulating}
+                  />
+                </div>
+
+                {/* Run Button */}
+                <button
+                  onClick={runSimulation}
+                  disabled={isSimulating}
+                  className={`w-full py-2 px-4 rounded-lg font-medium text-sm transition-all ${isSimulating
+                    ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                    : 'bg-gradient-to-r from-cyan-500 to-fuchsia-500 text-white hover:from-cyan-400 hover:to-fuchsia-400'
+                    }`}
+                >
+                  {isSimulating ? 'Processing...' : 'Run Simulation'}
+                </button>
+              </div>
+            </div>
+
             {/* Map preview */}
             <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 mb-6">
               <div className="flex justify-between items-center mb-3">
@@ -214,7 +287,7 @@ function App() {
                 </div>
               </div>
               <div className="h-80 w-full rounded-lg overflow-hidden border border-white/10">
-                <Map />
+                <Map refreshTrigger={mapRefreshTrigger} />
               </div>
             </div>
 

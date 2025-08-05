@@ -140,9 +140,9 @@ END;
 $$;
 
 -----------------------------------------------------------------------
---  Main 5-minute change simulator
+--  Interactive tile simulation (user-triggered)
 -----------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION simulate_changes_5min(
+CREATE OR REPLACE FUNCTION simulate_tile_changes(
     z   INT    DEFAULT 8,
     pct FLOAT8 DEFAULT 0.05
 )
@@ -167,7 +167,7 @@ DECLARE
     upd_count             INT;
 BEGIN
     RAISE NOTICE
-        'Starting 5-minute change simulation (%.2f%% of tiles at zoom %)…',
+        'Starting interactive tile simulation (%.1f%% of tiles at zoom %)…',
         pct * 100, z;
 
     FOR t IN SELECT * FROM pick_tiles_for_tick(z, pct)
@@ -253,7 +253,7 @@ BEGIN
     polygons_updated  := total_polygons_updated;
 
     RAISE NOTICE
-        'Simulation complete: % tiles (%.2f%%), % pts-del, % pts-ins, % lines, % polys',
+        'Interactive simulation complete: % tiles (%.1f%%), % pts-del, % pts-ins, % lines, % polys',
         tile_count,
         tile_count::FLOAT / (1 << z)^2 * 100,
         total_points_deleted,
@@ -274,7 +274,7 @@ $$;
 CREATE OR REPLACE FUNCTION run_synthetic_simulation()
 RETURNS VOID
 LANGUAGE sql AS $$
-    SELECT simulate_changes_5min() INTO TEMP TABLE sim_results;
+    SELECT simulate_tile_changes() INTO TEMP TABLE sim_results;
 $$;
 
 -----------------------------------------------------------------------

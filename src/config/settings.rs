@@ -60,7 +60,7 @@ impl Default for Config {
                 pmtiles_archive_path: PathBuf::from("/var/lib/pmtiles/planet.pmtiles"),
             },
             worker: WorkerConfig {
-                batch_timeout_secs: 300, // 5 minutes for batched processing
+                batch_timeout_secs: 30, // 30 seconds for responsive processing
                 max_retries: 1,
             },
             geometry: GeometryConfig {

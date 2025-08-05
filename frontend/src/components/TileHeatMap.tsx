@@ -209,9 +209,7 @@ const TileHeatMap: React.FC = () => {
 
   // Fetch initial data and set up polling
   useEffect(() => {
-    fetchTileStatus()
-    const interval = setInterval(fetchTileStatus, 15000) // Update every 15 seconds
-    return () => clearInterval(interval)
+    fetchTileStatus() // Fetch initial data only
   }, [])
 
   const formatLastUpdated = (lastUpdated: string | null): string => {

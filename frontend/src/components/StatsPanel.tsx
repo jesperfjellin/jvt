@@ -95,9 +95,7 @@ const StatsPanel: React.FC = () => {
   }
 
   useEffect(() => {
-    fetchData()
-    const interval = setInterval(fetchData, 15000) // Update every 15 seconds
-    return () => clearInterval(interval)
+    fetchData() // Fetch initial data only
   }, [])
 
   const formatNumber = (num: number): string => {
@@ -154,7 +152,7 @@ const StatsPanel: React.FC = () => {
   return (
     <div className="p-6 text-neutral-100">
       <h2 className="text-lg font-semibold mb-6 text-neutral-100">Performance Analysis</h2>
-      
+
       <div className="mb-6">
         <h3 className="text-sm font-medium mb-3 text-neutral-300">Efficiency Summary</h3>
         <div className="space-y-2">

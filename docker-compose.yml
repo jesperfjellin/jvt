@@ -57,34 +57,6 @@ services:
     restart: unless-stopped
 
 
-  jvt-data-simulator:
-    build: .
-    container_name: jvt-data-simulator
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/gis
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - ./logs:/var/log/tiles
-      - ./scripts:/usr/local/scripts:ro
-    command: >
-      bash -c "
-      echo '[$(date)] Starting rotating 5% tile simulation...' >> /var/log/tiles/data-simulation.log;
-      echo '[$(date)] Waiting 120 seconds for worker startup...' >> /var/log/tiles/data-simulation.log;
-      sleep 120;
-      while true; do 
-        echo '[$(date)] Starting 5% tile cycle (targeting different tiles each time)...' >> /var/log/tiles/data-simulation.log;
-        /usr/local/scripts/synthetic_change_simulator.sh >> /var/log/tiles/data-simulation.log 2>&1;
-        echo '[$(date)] Data cycle complete. Waiting for tile processing...' >> /var/log/tiles/data-simulation.log;
-        while [ -f '/tmp/tile_processing_in_progress' ]; do sleep 15; done;
-        echo '[$(date)] Sleeping 360 seconds (6 minutes) before next 5% cycle...' >> /var/log/tiles/data-simulation.log; 
-        sleep 360; 
-      done
-      "
-
-    restart: unless-stopped
 
   frontend:
     build: 

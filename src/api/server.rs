@@ -1,5 +1,5 @@
 use anyhow::Result;
-use axum::{Router, extract::State, http::StatusCode, response::Json, routing::get};
+use axum::{Router, extract::State, http::StatusCode, response::Json, routing::{get, post}};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -132,6 +132,7 @@ impl ApiServer {
         Router::new()
             .route("/api/tile-status", get(get_tile_status))
             .route("/api/system-stats", get(get_system_stats))
+            .route("/api/simulate", post(run_simulation))
             .route("/api/health", get(health_check))
             .layer(CorsLayer::permissive()) // Allow frontend to access API
             .with_state(shared_state)
@@ -316,6 +317,49 @@ async fn get_system_stats(
         }
         Err(e) => {
             error!("Failed to get system stats: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Request body for simulation endpoint
+#[derive(Deserialize)]
+struct SimulationRequest {
+    percentage: f64,
+}
+
+/// Response for simulation endpoint
+#[derive(Serialize)]
+struct SimulationResponse {
+    message: String,
+    percentage: f64,
+    estimated_tiles: u32,
+}
+
+/// API endpoint: Run tile simulation
+async fn run_simulation(
+    State(api_server): State<Arc<ApiServer>>,
+    Json(request): Json<SimulationRequest>,
+) -> Result<Json<SimulationResponse>, StatusCode> {
+    let percentage = request.percentage.clamp(1.0, 100.0) / 100.0; // Convert to 0.01-1.0 range
+    
+    info!("Starting user-triggered simulation with {:.1}% of tiles", percentage * 100.0);
+    
+    // Call the PostgreSQL simulation function
+    let query = "SELECT simulate_tile_changes(8, $1)";
+    match api_server.database.query_one(query, &[&percentage]).await {
+        Ok(_) => {
+            let estimated_tiles = (65536.0 * percentage) as u32;
+            info!("Successfully triggered simulation for ~{} tiles", estimated_tiles);
+            
+            Ok(Json(SimulationResponse {
+                message: "Simulation started successfully".to_string(),
+                percentage: percentage * 100.0,
+                estimated_tiles,
+            }))
+        }
+        Err(e) => {
+            error!("Failed to start simulation: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

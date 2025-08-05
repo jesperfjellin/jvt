@@ -18,7 +18,11 @@ interface TileStatusResponse {
   last_check: string;
 }
 
-const Map: React.FC = () => {
+interface MapProps {
+  refreshTrigger?: number; // Used to trigger refresh from parent
+}
+
+const Map: React.FC<MapProps> = ({ refreshTrigger }) => {
   const mapContainer = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const [tileStatus, setTileStatus] = useState<TileStatusResponse | null>(null)
@@ -180,11 +184,12 @@ const Map: React.FC = () => {
     }
   }, [tileStatus])
 
-  // Set up periodic tile status updates
+  // Refresh when parent triggers it
   useEffect(() => {
-    const interval = setInterval(fetchTileStatus, 30000) // Update every 30 seconds
-    return () => clearInterval(interval)
-  }, [])
+    if (refreshTrigger && refreshTrigger > 0) {
+      fetchTileStatus()
+    }
+  }, [refreshTrigger])
 
   return (
     <div className="map-component">
