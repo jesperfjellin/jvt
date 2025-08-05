@@ -107,23 +107,30 @@ impl DatabaseTileProcessor {
 
         info!("Marking {} tiles as processed", batch.len());
 
-        // Use a simple UPDATE query instead of the complex JSON function
-        let mut updated_count = 0;
-
+        // Use a simple approach: build a WHERE clause with OR conditions
+        // This avoids complex parameter lifetime issues while still being efficient
+        let mut where_conditions = Vec::new();
         for coord in &batch.tiles {
-            let query = "UPDATE changed_tiles SET processed_at = NOW() WHERE z = $1 AND x = $2 AND y = $3 AND processed_at IS NULL";
-            let result = self
-                .database
-                .execute(
-                    query,
-                    &[&(coord.z as i16), &(coord.x as i32), &(coord.y as i32)],
-                )
-                .await
-                .context("Failed to mark tile as processed")?;
-            updated_count += result;
+            where_conditions.push(format!(
+                "(z = {} AND x = {} AND y = {})",
+                coord.z as i16, coord.x as i32, coord.y as i32
+            ));
         }
 
-        info!("Marked {} tile changes as processed", updated_count);
+        let where_clause = where_conditions.join(" OR ");
+        let query = format!(
+            "UPDATE changed_tiles SET processed_at = NOW() 
+             WHERE ({}) AND processed_at IS NULL",
+            where_clause
+        );
+
+        let updated_count = self
+            .database
+            .execute(&query, &[])
+            .await
+            .context("Failed to mark tiles as processed")?;
+
+        info!("Marked {} tile changes as processed in single batch", updated_count);
         Ok(())
     }
 

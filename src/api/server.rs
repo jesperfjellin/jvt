@@ -33,6 +33,8 @@ pub struct TileStatus {
     pub y: u32,
     pub last_updated: Option<String>, // ISO timestamp or null
     pub is_fresh: bool,               // true if updated in last 5 minutes
+    pub change_count: u32,            // number of times this tile has been updated
+    pub seconds_since_update: Option<f64>, // seconds since last update
 }
 
 /// API response containing tile status data
@@ -42,6 +44,17 @@ pub struct TileStatusResponse {
     pub fresh_count: usize,
     pub stale_count: usize,
     pub last_check: String,
+    pub performance_stats: PerformanceStats,
+}
+
+/// Performance comparison statistics
+#[derive(Debug, Serialize)]
+pub struct PerformanceStats {
+    pub tiles_updated: usize,
+    pub estimated_processing_time_ms: u64,
+    pub full_regeneration_time_ms: u64,
+    pub speedup_factor: f64,
+    pub efficiency_percentage: f64,
 }
 
 /// System statistics response for efficiency metrics
@@ -129,14 +142,16 @@ impl ApiServer {
         // 1. Get cached bounds and tile coverage (efficient!)
         let (_bounds, all_tiles) = self.get_cached_bounds_and_tiles().await?;
 
-        // 2. Get freshness status for all tiles that have been processed
+        // 2. Get freshness status and change intensity for all tiles that have been processed
         let freshness_query = r#"
             SELECT z, x, y,
                    MAX(processed_at) as last_processed,
                    CASE 
-                       WHEN MAX(processed_at) > NOW() - INTERVAL '5 minutes' THEN true
+                       WHEN MAX(processed_at) > NOW() - INTERVAL '5 minutes 30 seconds' THEN true
                        ELSE false
-                   END as is_fresh
+                   END as is_fresh,
+                   COUNT(*) as change_count,
+                   EXTRACT(EPOCH FROM (NOW() - MAX(processed_at)))::FLOAT8 as seconds_since_update
             FROM changed_tiles 
             WHERE processed_at IS NOT NULL
             GROUP BY z, x, y
@@ -144,7 +159,7 @@ impl ApiServer {
 
         let rows = self.database.query(freshness_query, &[]).await?;
 
-        // Build a map of tile coordinates to freshness status
+        // Build a map of tile coordinates to freshness status and change intensity
         let mut tile_freshness = std::collections::HashMap::new();
         for row in rows {
             let z: i16 = row.get(0);  // smallint in PostgreSQL
@@ -152,6 +167,8 @@ impl ApiServer {
             let y: i32 = row.get(2);
             let last_processed: Option<SystemTime> = row.get(3);
             let is_fresh: bool = row.get(4);
+            let change_count: i64 = row.get(5);
+            let seconds_since_update: Option<f64> = row.get(6);
 
             let coord = TileCoord::new(z as u8, x as u32, y as u32);
             let last_updated = last_processed.and_then(|st| {
@@ -165,7 +182,7 @@ impl ApiServer {
                     })
             });
 
-            tile_freshness.insert(coord, (last_updated, is_fresh));
+            tile_freshness.insert(coord, (last_updated, is_fresh, change_count as u32, seconds_since_update));
         }
 
         // 3. Build complete tile status response
@@ -174,10 +191,10 @@ impl ApiServer {
         let mut stale_count = 0;
 
         for tile_coord in all_tiles {
-            let (last_updated, is_fresh) = tile_freshness
+            let (last_updated, is_fresh, change_count, seconds_since_update) = tile_freshness
                 .get(&tile_coord)
-                .map(|(last, fresh)| (last.clone(), *fresh))
-                .unwrap_or((None, false)); // Default to stale if never processed
+                .map(|(last, fresh, count, seconds)| (last.clone(), *fresh, *count, *seconds))
+                .unwrap_or((None, false, 0, None)); // Default to stale if never processed
 
             if is_fresh {
                 fresh_count += 1;
@@ -191,14 +208,40 @@ impl ApiServer {
                 y: tile_coord.y,
                 last_updated,
                 is_fresh,
+                change_count,
+                seconds_since_update,
             });
         }
+
+        // Calculate performance statistics
+        let total_tiles = fresh_count + stale_count;
+        let estimated_processing_time_ms = (fresh_count as f64 * 0.6) as u64; // ~0.6ms per tile
+        let full_regeneration_time_ms = (total_tiles as f64 * 0.6) as u64;
+        let speedup_factor = if fresh_count > 0 {
+            total_tiles as f64 / fresh_count as f64
+        } else {
+            1.0
+        };
+        let efficiency_percentage = if total_tiles > 0 {
+            (stale_count as f64 / total_tiles as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let performance_stats = PerformanceStats {
+            tiles_updated: fresh_count,
+            estimated_processing_time_ms,
+            full_regeneration_time_ms,
+            speedup_factor,
+            efficiency_percentage,
+        };
 
         Ok(TileStatusResponse {
             tiles,
             fresh_count,
             stale_count,
             last_check: chrono::Utc::now().to_rfc3339(),
+            performance_stats,
         })
     }
 

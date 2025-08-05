@@ -104,17 +104,7 @@ const Map: React.FC = () => {
         }
       })
 
-      // Add border layer for tiles
-      map.addLayer({
-        id: 'tile-border',
-        type: 'line',
-        source: 'tile-overlay',
-        paint: {
-          'line-color': '#ffffff',
-          'line-width': 1,
-          'line-opacity': 0.8
-        }
-      })
+
     }
   }
 
