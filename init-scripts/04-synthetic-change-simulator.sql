@@ -261,6 +261,9 @@ BEGIN
         total_lines_updated,
         total_polygons_updated;
 
+    -- Notify the worker that tiles are ready for processing
+    NOTIFY tiles_updated;
+
     RETURN NEXT;
 END;
 $$;

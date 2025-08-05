@@ -77,21 +77,21 @@ function App() {
       <div className="max-w-7xl mx-auto px-6 py-12">
         <div className="grid grid-cols-2 gap-16 items-start">
           {/* ───────────────────────── Left Side – Content ───────────────────────── */}
-          <div className="space-y-8">
+          <div className="flex flex-col h-full">
             <div>
-              <h1 className="text-4xl font-bold bg-gradient-to-r from-cyan-300 via-fuchsia-300 to-sky-300 bg-clip-text text-transparent mb-4">
+              <h1 className="text-4xl font-bold bg-gradient-to-r from-cyan-300 via-fuchsia-300 to-sky-300 bg-clip-text text-transparent mb-5">
                 Incremental Vector Tiles
               </h1>
-              <p className="text-xl leading-relaxed">
+              <p className="text-xl leading-relaxed mb-2">
                 A smarter way to render and deliver map tiles by processing only
                 the changes, not rebuilding everything from scratch.
               </p>
             </div>
 
-            <div className="space-y-6">
+            <div className="flex-1 space-y-6">
               {/* How it works */}
               <div>
-                <h2 className="text-2xl font-semibold mb-3">How it works</h2>
+                <h2 className="text-2xl font-semibold mb-5">How it works</h2>
                 <p className="leading-relaxed">
                   Traditional tile generation rebuilds the entire tileset
                   whenever data changes. JVT uses PostgreSQL triggers and
@@ -102,7 +102,7 @@ function App() {
 
               {/* Tech stack */}
               <div>
-                <h2 className="text-2xl font-semibold mb-3">
+                <h2 className="text-2xl font-semibold mb-5">
                   The technology stack
                 </h2>
                 <ul className="space-y-2">
@@ -139,7 +139,7 @@ function App() {
 
               {/* Why it matters */}
               <div>
-                <h2 className="text-2xl font-semibold mb-3">Why it matters</h2>
+                <h2 className="text-2xl font-semibold mb-5">Why it matters</h2>
                 <p className="leading-relaxed">
                   For large-scale mapping applications, regenerating millions of
                   tiles for small changes wastes computational resources and
@@ -149,7 +149,7 @@ function App() {
               </div>
 
               {/* Live Demo Box */}
-              <div className="bg-white/5 backdrop-blur-sm border border-white/20 p-6 rounded-xl shadow-lg">
+              <div className="mt-8 bg-white/5 backdrop-blur-sm border border-white/20 p-6 rounded-xl shadow-lg">
                 <h3 className="font-semibold mb-2">Live Demo</h3>
                 <p className="text-sm text-slate-300">
                   The dashboard on the right shows a live simulation with
@@ -213,7 +213,7 @@ function App() {
                   </span>
                 </div>
               </div>
-              <div className="h-48 w-full rounded-lg overflow-hidden border border-white/10">
+              <div className="h-80 w-full rounded-lg overflow-hidden border border-white/10">
                 <Map />
               </div>
             </div>
@@ -239,12 +239,12 @@ function App() {
                 <div className="text-emerald-200">Efficiency</div>
                 <div className="font-medium text-emerald-300">
                   {tileStatus &&
-                  tileStatus.fresh_count + tileStatus.stale_count > 0
+                    tileStatus.fresh_count + tileStatus.stale_count > 0
                     ? `${(
-                        (tileStatus.stale_count /
-                          (tileStatus.fresh_count + tileStatus.stale_count)) *
-                        100
-                      ).toFixed(1)}%`
+                      (tileStatus.stale_count /
+                        (tileStatus.fresh_count + tileStatus.stale_count)) *
+                      100
+                    ).toFixed(1)}%`
                     : '0%'}{' '}
                   cache hit
                 </div>
