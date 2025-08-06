@@ -1,5 +1,5 @@
 /***********************************************************************
-  06-simulation-state-reset.sql
+  06-simulation-state-reset-fixed.sql
   ----------------------------------------------------------------------
   Simulation state reset functionality for JVT demo.
   
@@ -136,7 +136,7 @@ CREATE OR REPLACE FUNCTION restore_geometry_snapshot(
     snapshot_id TEXT
 )
 RETURNS BOOLEAN
-LANGUAGE plpgsql AS $
+LANGUAGE plpgsql AS $$
 DECLARE
     snapshot_exists BOOLEAN;
     points_restored INT;
@@ -166,7 +166,7 @@ BEGIN
         INSERT INTO demo_points (id, geom, demo_tag, created_at, updated_at)
         SELECT id, geom, demo_tag, created_at, updated_at
         FROM demo_points_backup
-        WHERE snapshot_id = restore_geometry_snapshot.snapshot_id;
+        WHERE demo_points_backup.snapshot_id = restore_geometry_snapshot.snapshot_id;
         
         GET DIAGNOSTICS points_restored = ROW_COUNT;
         
@@ -174,7 +174,7 @@ BEGIN
         INSERT INTO demo_lines (id, geom, demo_tag, created_at, updated_at)
         SELECT id, geom, demo_tag, created_at, updated_at
         FROM demo_lines_backup
-        WHERE snapshot_id = restore_geometry_snapshot.snapshot_id;
+        WHERE demo_lines_backup.snapshot_id = restore_geometry_snapshot.snapshot_id;
         
         GET DIAGNOSTICS lines_restored = ROW_COUNT;
         
@@ -182,7 +182,7 @@ BEGIN
         INSERT INTO demo_polygons (id, geom, demo_tag, created_at, updated_at)
         SELECT id, geom, demo_tag, created_at, updated_at
         FROM demo_polygons_backup
-        WHERE snapshot_id = restore_geometry_snapshot.snapshot_id;
+        WHERE demo_polygons_backup.snapshot_id = restore_geometry_snapshot.snapshot_id;
         
         GET DIAGNOSTICS polygons_restored = ROW_COUNT;
         
@@ -205,7 +205,7 @@ BEGIN
         RAISE;
     END;
 END;
-$;
+$$;
 
 -----------------------------------------------------------------------
 --  Function: reset_simulation_state()
@@ -222,7 +222,7 @@ RETURNS TABLE (
     polygons_restored INT,
     tiles_cleared INT
 )
-LANGUAGE plpgsql AS $
+LANGUAGE plpgsql AS $$
 DECLARE
     target_snapshot_id TEXT;
     baseline_snapshot TEXT;
@@ -310,7 +310,7 @@ BEGIN
     
     RETURN NEXT;
 END;
-$;
+$$;
 
 -----------------------------------------------------------------------
 --  Function: cleanup_old_snapshots()
@@ -321,7 +321,7 @@ CREATE OR REPLACE FUNCTION cleanup_old_snapshots(
     keep_baseline BOOLEAN DEFAULT TRUE
 )
 RETURNS INT
-LANGUAGE plpgsql AS $
+LANGUAGE plpgsql AS $$
 DECLARE
     snapshots_to_delete TEXT[];
     snapshot_id TEXT;
@@ -338,9 +338,9 @@ BEGIN
     
     -- Delete old snapshots
     FOREACH snapshot_id IN ARRAY snapshots_to_delete LOOP
-        DELETE FROM demo_points_backup WHERE snapshot_id = cleanup_old_snapshots.snapshot_id;
-        DELETE FROM demo_lines_backup WHERE snapshot_id = cleanup_old_snapshots.snapshot_id;
-        DELETE FROM demo_polygons_backup WHERE snapshot_id = cleanup_old_snapshots.snapshot_id;
+        DELETE FROM demo_points_backup WHERE demo_points_backup.snapshot_id = cleanup_old_snapshots.snapshot_id;
+        DELETE FROM demo_lines_backup WHERE demo_lines_backup.snapshot_id = cleanup_old_snapshots.snapshot_id;
+        DELETE FROM demo_polygons_backup WHERE demo_polygons_backup.snapshot_id = cleanup_old_snapshots.snapshot_id;
         DELETE FROM geometry_snapshots WHERE id = cleanup_old_snapshots.snapshot_id;
         
         deleted_count := deleted_count + 1;
@@ -350,7 +350,7 @@ BEGIN
     RAISE NOTICE 'Cleaned up % old snapshots', deleted_count;
     RETURN deleted_count;
 END;
-$;
+$$;
 
 -----------------------------------------------------------------------
 --  Function: get_simulation_state_info()
@@ -366,7 +366,7 @@ RETURNS TABLE (
     current_polygons INT,
     simulation_generated_points INT
 )
-LANGUAGE plpgsql AS $
+LANGUAGE plpgsql AS $$
 DECLARE
     active_count INT;
     snapshot_count INT;
@@ -403,7 +403,7 @@ BEGIN
     
     RETURN NEXT;
 END;
-$;
+$$;
 
 -----------------------------------------------------------------------
 --  Function: recover_from_incomplete_simulation()
@@ -415,7 +415,7 @@ RETURNS TABLE (
     recovery_action TEXT,
     sessions_cleaned INT
 )
-LANGUAGE plpgsql AS $
+LANGUAGE plpgsql AS $$
 DECLARE
     incomplete_sessions INT;
     cleaned_sessions INT := 0;
@@ -456,12 +456,12 @@ BEGIN
     
     RETURN NEXT;
 END;
-$;
+$$;
 
 -----------------------------------------------------------------------
 --  Initialize baseline snapshot if none exists
 -----------------------------------------------------------------------
-DO $
+DO $$
 BEGIN
     -- Check if we have any baseline snapshots
     IF NOT EXISTS (SELECT 1 FROM geometry_snapshots WHERE is_baseline = TRUE) THEN
@@ -480,7 +480,7 @@ BEGIN
         END IF;
     END IF;
 END;
-$;
+$$;
 
 -----------------------------------------------------------------------
 --  Completion notice

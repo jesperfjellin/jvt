@@ -133,6 +133,7 @@ impl ApiServer {
             .route("/api/tile-status", get(get_tile_status))
             .route("/api/system-stats", get(get_system_stats))
             .route("/api/simulate", post(run_simulation))
+            .route("/api/simulation-status", get(get_simulation_status))
             .route("/api/health", get(health_check))
             .layer(CorsLayer::permissive()) // Allow frontend to access API
             .with_state(shared_state)
@@ -326,6 +327,7 @@ async fn get_system_stats(
 #[derive(Deserialize)]
 struct SimulationRequest {
     percentage: f64,
+    seed: Option<i32>,
 }
 
 /// Response for simulation endpoint
@@ -334,6 +336,25 @@ struct SimulationResponse {
     message: String,
     percentage: f64,
     estimated_tiles: u32,
+    session_id: Option<String>,
+}
+
+/// Response for simulation status endpoint
+#[derive(Serialize)]
+struct SimulationStatusResponse {
+    is_running: bool,
+    active_sessions: Vec<ActiveSession>,
+}
+
+/// Active simulation session info
+#[derive(Serialize)]
+struct ActiveSession {
+    session_id: String,
+    percentage: f64,
+    status: String,
+    started_at: String,
+    minutes_running: i32,
+    minutes_until_timeout: i32,
 }
 
 /// API endpoint: Run tile simulation
@@ -342,34 +363,183 @@ async fn run_simulation(
     Json(request): Json<SimulationRequest>,
 ) -> Result<Json<SimulationResponse>, StatusCode> {
     let percentage = request.percentage.clamp(1.0, 100.0) / 100.0; // Convert to 0.01-1.0 range
+    let seed = request.seed.unwrap_or(12345);
     
-    info!("Starting user-triggered simulation with {:.1}% of tiles", percentage * 100.0);
+    info!("Starting user-triggered simulation with {:.1}% of tiles (seed: {})", percentage * 100.0, seed);
     
-    // Reset tiles to baseline before new simulation
-    let reset_query = "DELETE FROM changed_tiles WHERE processed_at IS NOT NULL";
-    if let Err(e) = api_server.database.execute(reset_query, &[]).await {
-        error!("Failed to reset tiles before simulation: {}", e);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    // Step 1: Check for active simulations and create new session
+    let session_query = "SELECT * FROM create_simulation_session($1, $2, $3, $4)";
+    let session_result = match api_server.database.query_one(
+        session_query, 
+        &[&percentage, &seed, &60i32, &"api_user"]
+    ).await {
+        Ok(row) => row,
+        Err(e) => {
+            error!("Failed to create simulation session: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+    
+    let session_id: Option<uuid::Uuid> = session_result.get(0);
+    let success: bool = session_result.get(1);
+    let message: String = session_result.get(2);
+    
+    if !success {
+        warn!("Cannot start simulation: {}", message);
+        return Ok(Json(SimulationResponse {
+            message,
+            percentage: percentage * 100.0,
+            estimated_tiles: 0,
+            session_id: None,
+        }));
     }
     
-    // Call the PostgreSQL simulation function
-    let query = "SELECT simulate_tile_changes(8, $1)";
-    match api_server.database.query_one(query, &[&percentage]).await {
-        Ok(_) => {
-            let estimated_tiles = (65536.0 * percentage) as u32;
-            info!("Successfully triggered simulation for ~{} tiles", estimated_tiles);
+    let session_id_str = session_id.unwrap().to_string();
+    info!("Created simulation session: {}", session_id_str);
+    
+    // Step 2: Reset simulation state before starting new simulation
+    let reset_query = "SELECT * FROM reset_simulation_state()";
+    match api_server.database.query_one(reset_query, &[]).await {
+        Ok(row) => {
+            let reset_success: bool = row.get(0);
+            let reset_message: String = row.get(1);
+            
+            if !reset_success {
+                error!("Failed to reset simulation state: {}", reset_message);
+                
+                // Cleanup the session we just created
+                let cleanup_query = "SELECT cleanup_simulation_session($1, 'failed')";
+                let _ = api_server.database.query_one(cleanup_query, &[&session_id]).await;
+                
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+            
+            info!("Simulation state reset successfully: {}", reset_message);
+        }
+        Err(e) => {
+            error!("Failed to reset simulation state: {}", e);
+            
+            // Cleanup the session we just created
+            let cleanup_query = "SELECT cleanup_simulation_session($1, 'failed')";
+            let _ = api_server.database.query_one(cleanup_query, &[&session_id]).await;
+            
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+    
+    // Step 3: Update session status to processing
+    let update_query = "SELECT update_simulation_session($1, 'processing')";
+    if let Err(e) = api_server.database.query_one(update_query, &[&session_id]).await {
+        error!("Failed to update session status: {}", e);
+    }
+    
+    // Step 4: Run the actual simulation
+    let simulation_query = "SELECT * FROM simulate_tile_changes(8, $1, $2)";
+    let simulation_result = match api_server.database.query_one(
+        simulation_query, 
+        &[&percentage, &seed]
+    ).await {
+        Ok(row) => {
+            let selected_tiles: i32 = row.get(0);
+            let points_deleted: i32 = row.get(1);
+            let points_inserted: i32 = row.get(2);
+            let lines_updated: i32 = row.get(3);
+            let polygons_updated: i32 = row.get(4);
+            
+            info!(
+                "Simulation completed successfully: {} tiles, {} points deleted, {} points inserted, {} lines updated, {} polygons updated",
+                selected_tiles, points_deleted, points_inserted, lines_updated, polygons_updated
+            );
+            
+            // Step 5: Mark session as completed
+            let complete_query = "SELECT cleanup_simulation_session($1, 'completed')";
+            if let Err(e) = api_server.database.query_one(complete_query, &[&session_id]).await {
+                error!("Failed to cleanup simulation session: {}", e);
+            }
             
             Ok(Json(SimulationResponse {
-                message: "Simulation started successfully".to_string(),
+                message: format!(
+                    "Simulation completed successfully: {} tiles processed, {} points deleted, {} points inserted, {} lines updated, {} polygons updated",
+                    selected_tiles, points_deleted, points_inserted, lines_updated, polygons_updated
+                ),
                 percentage: percentage * 100.0,
-                estimated_tiles,
+                estimated_tiles: selected_tiles as u32,
+                session_id: Some(session_id_str),
             }))
         }
         Err(e) => {
-            error!("Failed to start simulation: {}", e);
+            error!("Simulation failed: {}", e);
+            
+            // Step 5: Mark session as failed
+            let fail_query = "SELECT cleanup_simulation_session($1, 'failed')";
+            if let Err(cleanup_err) = api_server.database.query_one(fail_query, &[&session_id]).await {
+                error!("Failed to cleanup failed simulation session: {}", cleanup_err);
+            }
+            
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
-    }
+    };
+    
+    simulation_result
+}
+
+/// API endpoint: Get simulation status
+async fn get_simulation_status(
+    State(api_server): State<Arc<ApiServer>>,
+) -> Result<Json<SimulationStatusResponse>, StatusCode> {
+    // Check if any simulation is currently running
+    let is_running_query = "SELECT is_simulation_running()";
+    let is_running = match api_server.database.query_one(is_running_query, &[]).await {
+        Ok(row) => row.get::<_, bool>(0),
+        Err(e) => {
+            error!("Failed to check simulation status: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+    
+    // Get active session details
+    let active_sessions_query = "SELECT * FROM get_active_simulation_sessions()";
+    let active_sessions = match api_server.database.query(active_sessions_query, &[]).await {
+        Ok(rows) => {
+            rows.into_iter().map(|row| {
+                let session_id: uuid::Uuid = row.get(0);
+                let percentage: f64 = row.get(1);
+                let status: String = row.get(2);
+                let started_at: SystemTime = row.get(3);
+                let minutes_running: i32 = row.get(5);
+                let minutes_until_timeout: i32 = row.get(6);
+                
+                let started_at_str = started_at
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .ok()
+                    .and_then(|duration| {
+                        chrono::DateTime::from_timestamp(duration.as_secs() as i64, 0)
+                            .map(|dt| dt.to_rfc3339())
+                    })
+                    .unwrap_or_else(|| "Invalid timestamp".to_string());
+                
+                ActiveSession {
+                    session_id: session_id.to_string(),
+                    percentage: percentage * 100.0,
+                    status,
+                    started_at: started_at_str,
+                    minutes_running,
+                    minutes_until_timeout,
+                }
+            }).collect()
+        }
+        Err(e) => {
+            error!("Failed to get active sessions: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+    
+    info!("Simulation status check: running={}, active_sessions={}", is_running, active_sessions.len());
+    
+    Ok(Json(SimulationStatusResponse {
+        is_running,
+        active_sessions,
+    }))
 }
 
 /// API endpoint: Health check
