@@ -104,7 +104,7 @@ fn init_logging() -> Result<()> {
     Ok(())
 }
 
-/// Main worker loop - batched processing every 5 minutes with file lock coordination
+/// Main worker loop - immediate processing on notifications with periodic cleanup
 async fn run_worker_loop(
     listener: &mut NotificationListener,
     processor: &DatabaseTileProcessor,
@@ -112,62 +112,59 @@ async fn run_worker_loop(
     pmtiles_writer: &mut PmtilesWriter,
     config: &Config,
 ) -> Result<()> {
-    info!(
-        "Starting batched worker loop (processes tiles every {}s with file lock coordination)",
-        config.worker.batch_timeout_secs
-    );
+    info!("Starting worker loop (immediate processing on notifications only)");
 
     loop {
-        // Wait for notifications OR timeout after 5 minutes
-        match listener
-            .wait_for_notification(Duration::from_secs(config.worker.batch_timeout_secs))
-            .await
+        // Wait for notifications with short timeout as fallback
+        match listener.wait_for_notification(Duration::from_secs(5)).await
         {
             Ok(Some(notification)) => {
                 info!(
-                    "Received change notification: {} bytes payload",
+                    "Received change notification: {} bytes payload - processing immediately",
                     notification.payload.len()
                 );
-                // Don't process immediately - just acknowledge that changes occurred
-                info!("Change recorded, will process in next batch cycle");
-            }
-            Ok(None) => {
-                // Timeout occurred - time to process pending tiles!
-                info!("5-minute timer expired, processing pending tiles...");
-
-                // Wait for data generation to complete before processing tiles
-                while std::path::Path::new("/tmp/data_generation_in_progress").exists() {
-                    info!("Waiting for data generation to complete...");
-                    sleep(Duration::from_secs(30)).await;
-                }
-
-                // Create tile processing lock
-                if let Err(e) = std::fs::write("/tmp/tile_processing_in_progress", "") {
-                    warn!("Failed to create tile processing lock: {}", e);
-                }
-
+                
+                // Process tiles immediately when notification is received
                 match process_pending_tiles_batch(processor, mvt_generator, pmtiles_writer).await {
                     Ok(processed_count) => {
                         if processed_count > 0 {
-                            info!("Successfully processed {} tiles in batch", processed_count);
-                        } else {
-                            info!("No pending tiles to process");
+                            info!("Successfully processed {} tiles from notification", processed_count);
+                            
+                            // Wait a bit for the frontend to fetch the results
+                            tokio::time::sleep(Duration::from_secs(10)).await;
+                            
+                            // Reset tile status for next simulation
+                            match processor.reset_to_baseline().await {
+                                Ok(reset_count) => {
+                                    info!("Reset {} tiles for next simulation", reset_count);
+                                }
+                                Err(e) => {
+                                    error!("Failed to reset tiles for next simulation: {}", e);
+                                }
+                            }
                         }
                     }
                     Err(e) => {
-                        error!("Failed to process tile batch: {}", e);
-                        // Continue loop - don't exit on processing errors
+                        error!("Failed to process tiles from notification: {}", e);
                     }
                 }
-
-                // Release tile processing lock
-                if let Err(e) = std::fs::remove_file("/tmp/tile_processing_in_progress") {
-                    warn!("Failed to remove tile processing lock: {}", e);
-                }
+            }
+            Ok(None) => {
+                // Timeout occurred - check for pending tiles (notifications may not be working)
+                tracing::debug!("Checking for pending tiles...");
                 
-                // Signal completion
-                if let Err(e) = std::fs::write("/tmp/tile_processing_complete", "") {
-                    warn!("Failed to create tile processing completion signal: {}", e);
+                // Check if there are any pending tiles that we missed
+                match process_pending_tiles_batch(processor, mvt_generator, pmtiles_writer).await {
+                    Ok(processed_count) => {
+                        if processed_count > 0 {
+                            warn!("Found {} pending tiles that weren't triggered by notification!", processed_count);
+                        } else {
+                            tracing::debug!("No pending tiles found during timeout check");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to check pending tiles during timeout: {}", e);
+                    }
                 }
             }
             Err(e) => {
@@ -179,7 +176,7 @@ async fn run_worker_loop(
     }
 }
 
-/// Process all pending tiles in batches (called every 5 minutes)
+/// Process all pending tiles immediately when notification is received
 async fn process_pending_tiles_batch(
     processor: &DatabaseTileProcessor,
     mvt_generator: &MvtGenerator,
@@ -197,8 +194,7 @@ async fn process_pending_tiles_batch(
         }
 
         batch_count += 1;
-        let summary = batch.summary();
-        info!("Processing tile batch #{}: {}", batch_count, summary);
+        info!("Processing {} tiles from simulation (chunk #{})...", batch.len(), batch_count);
 
         // Convert batch tiles to a vector for MVT generation
         let tile_coords: Vec<_> = batch.tiles.iter().cloned().collect();
@@ -215,7 +211,7 @@ async fn process_pending_tiles_batch(
         processor.mark_tiles_processed(&batch).await?;
 
         total_processed += batch.len();
-        info!("Completed batch #{} with {} tiles (total: {})", batch_count, batch.len(), total_processed);
+        info!("Completed chunk #{} with {} tiles (total: {})", batch_count, batch.len(), total_processed);
 
         // Safety check: if we've processed more than 100k tiles in one cycle, something might be wrong
         if total_processed > 100_000 {
@@ -225,7 +221,7 @@ async fn process_pending_tiles_batch(
     }
 
     if total_processed > 0 {
-        info!("Completed processing session: {} total tiles in {} batches", total_processed, batch_count);
+        info!("Completed simulation: {} total tiles processed", total_processed);
     }
 
     Ok(total_processed)
@@ -242,3 +238,5 @@ async fn debug_worker_status() {
     // - Recent processing stats
     // - Memory usage
 }
+
+

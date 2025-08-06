@@ -345,6 +345,13 @@ async fn run_simulation(
     
     info!("Starting user-triggered simulation with {:.1}% of tiles", percentage * 100.0);
     
+    // Reset tiles to baseline before new simulation
+    let reset_query = "DELETE FROM changed_tiles WHERE processed_at IS NOT NULL";
+    if let Err(e) = api_server.database.execute(reset_query, &[]).await {
+        error!("Failed to reset tiles before simulation: {}", e);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    
     // Call the PostgreSQL simulation function
     let query = "SELECT simulate_tile_changes(8, $1)";
     match api_server.database.query_one(query, &[&percentage]).await {

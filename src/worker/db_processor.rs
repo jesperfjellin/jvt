@@ -180,6 +180,19 @@ impl DatabaseTileProcessor {
         info!("Cleaned up {} old processed tile changes", result);
         Ok(result)
     }
+
+    /// Reset tile status to baseline for next simulation
+    pub async fn reset_to_baseline(&self) -> Result<u64> {
+        info!("Resetting tile status to baseline for next simulation...");
+        
+        // Clear all processed tiles to reset to baseline state
+        let reset_query = "DELETE FROM changed_tiles WHERE processed_at IS NOT NULL";
+        let reset_count = self.database.execute(reset_query, &[]).await?;
+        
+        info!("Cleared {} processed tiles - system reset to baseline", reset_count);
+        
+        Ok(reset_count)
+    }
 }
 
 #[derive(Debug)]

@@ -11,6 +11,29 @@
 ***********************************************************************/
 
 -----------------------------------------------------------------------
+--  Helper: seeded_random()
+--  ------------------------
+--  Generates deterministic pseudo-random numbers using a linear 
+--  congruential generator with configurable seed
+-----------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION seeded_random(seed_val BIGINT)
+RETURNS FLOAT8
+LANGUAGE plpgsql AS $$
+DECLARE
+    a CONSTANT BIGINT := 1664525;
+    c CONSTANT BIGINT := 1013904223;
+    m CONSTANT BIGINT := 4294967296; -- 2^32
+    result BIGINT;
+BEGIN
+    -- Linear congruential generator: (a * seed + c) mod m
+    result := (a * seed_val + c) % m;
+    
+    -- Convert to float between 0 and 1
+    RETURN result::FLOAT8 / m::FLOAT8;
+END;
+$$;
+
+-----------------------------------------------------------------------
 --  Helper: generate_cluster_centers()
 --  ----------------------------------
 --  Generates 5-7 cluster centers that drift over time
@@ -69,72 +92,91 @@ $$;
 -----------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION pick_tiles_for_tick(
     z   INT,          -- zoom level (only 8 used in demo)
-    pct FLOAT8        -- fraction to pick (e.g. 0.075 = 7.5%)
+    pct FLOAT8,       -- fraction to pick (e.g. 0.075 = 7.5%)
+    seed_val INT DEFAULT 12345  -- optional seed for deterministic selection
 )
 RETURNS TABLE (x INT, y INT)
 LANGUAGE plpgsql AS $$
 DECLARE
     n INT := 1 << z;  -- tiles per side
     target_tiles INT;
-    time_seed INT;
-    cluster_rec RECORD;
-    cluster_radius FLOAT;
-    tiles_per_cluster INT;
-    remaining_tiles INT;
+    current_seed BIGINT;
+    pseudo_random FLOAT8;
+    tile_x INT;
+    tile_y INT;
+    selected_count INT := 0;
 BEGIN
-    -- Calculate target number of tiles (5-10% with some randomness)
-    time_seed := (floor(extract(epoch FROM now()) / 300) % 10000)::INT;
-    target_tiles := floor(n * n * (pct + (time_seed % 100) * 0.0005));
+    -- Calculate exact target number of tiles
+    target_tiles := floor(n * n * pct);
     
-    -- Get cluster centers
-    remaining_tiles := target_tiles;
-    
-    FOR cluster_rec IN SELECT * FROM generate_cluster_centers(z) LOOP
-        -- Vary cluster size (some big, some small)
-        cluster_radius := 8 + (cluster_rec.cluster_id * 3) % 12;
-        tiles_per_cluster := GREATEST(1, remaining_tiles / 3);
-        
-        -- Select tiles around this cluster center
+    -- For high percentages (>90%), select all tiles deterministically
+    IF pct >= 0.9 THEN
         RETURN QUERY
-        WITH cluster_tiles AS (
-            SELECT 
-                gx, gy,
-                sqrt(power(gx - cluster_rec.center_x, 2) + 
-                     power(gy - cluster_rec.center_y, 2)) as distance
-            FROM generate_series(
-                GREATEST(0, floor(cluster_rec.center_x - cluster_radius)::INT),
-                LEAST(n-1, floor(cluster_rec.center_x + cluster_radius)::INT)
-            ) AS gx,
-            generate_series(
-                GREATEST(0, floor(cluster_rec.center_y - cluster_radius)::INT),
-                LEAST(n-1, floor(cluster_rec.center_y + cluster_radius)::INT)
-            ) AS gy
-            WHERE sqrt(power(gx - cluster_rec.center_x, 2) + 
-                      power(gy - cluster_rec.center_y, 2)) <= cluster_radius
-        ),
-        weighted_selection AS (
-            SELECT 
-                gx, gy, distance,
-                -- Probability decreases with distance from center
-                random() * (cluster_radius - distance + 1) as weight
-            FROM cluster_tiles
-        )
         SELECT gx::INT, gy::INT
-        FROM weighted_selection
-        ORDER BY weight DESC
-        LIMIT tiles_per_cluster;
+        FROM generate_series(0, n-1) AS gx,
+             generate_series(0, n-1) AS gy
+        ORDER BY gx, gy  -- Deterministic ordering
+        LIMIT target_tiles;
+        RETURN;
+    END IF;
+    
+    -- For lower percentages, use deterministic pseudo-random selection
+    -- Initialize seed based on input parameters for consistency
+    current_seed := seed_val + (z * 1000) + floor(pct * 10000);
+    
+    -- Use a simple deterministic approach: select tiles based on 
+    -- their coordinates and the seed to ensure consistent results
+    FOR tile_x IN 0..n-1 LOOP
+        FOR tile_y IN 0..n-1 LOOP
+            -- Generate deterministic pseudo-random value for this tile
+            current_seed := (current_seed * 1103515245 + 12345) % 2147483648;
+            pseudo_random := (current_seed % 1000000)::FLOAT8 / 1000000.0;
+            
+            -- Select tile if pseudo-random value is within percentage threshold
+            IF pseudo_random < pct AND selected_count < target_tiles THEN
+                x := tile_x;
+                y := tile_y;
+                selected_count := selected_count + 1;
+                RETURN NEXT;
+            END IF;
+            
+            -- Early exit if we've selected enough tiles
+            IF selected_count >= target_tiles THEN
+                EXIT;
+            END IF;
+        END LOOP;
         
-        remaining_tiles := remaining_tiles - tiles_per_cluster;
-        EXIT WHEN remaining_tiles <= 0;
+        -- Early exit from outer loop if we've selected enough tiles
+        IF selected_count >= target_tiles THEN
+            EXIT;
+        END IF;
     END LOOP;
     
-    -- Add some random scattered tiles to reach target percentage
-    IF remaining_tiles > 0 THEN
-        RETURN QUERY
-        SELECT 
-            floor(random() * n)::INT,
-            floor(random() * n)::INT
-        FROM generate_series(1, remaining_tiles);
+    -- If we didn't get enough tiles due to distribution, fill remaining deterministically
+    IF selected_count < target_tiles THEN
+        FOR tile_x IN 0..n-1 LOOP
+            FOR tile_y IN 0..n-1 LOOP
+                -- Skip tiles that were already selected (simple check)
+                current_seed := seed_val + (z * 1000) + floor(pct * 10000) + tile_x * 1000 + tile_y;
+                pseudo_random := seeded_random(current_seed);
+                
+                -- Use a different threshold to fill remaining slots
+                IF pseudo_random > pct AND selected_count < target_tiles THEN
+                    x := tile_x;
+                    y := tile_y;
+                    selected_count := selected_count + 1;
+                    RETURN NEXT;
+                    
+                    IF selected_count >= target_tiles THEN
+                        EXIT;
+                    END IF;
+                END IF;
+            END LOOP;
+            
+            IF selected_count >= target_tiles THEN
+                EXIT;
+            END IF;
+        END LOOP;
     END IF;
 END;
 $$;
@@ -144,7 +186,8 @@ $$;
 -----------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION simulate_tile_changes(
     z   INT    DEFAULT 8,
-    pct FLOAT8 DEFAULT 0.05
+    pct FLOAT8 DEFAULT 0.05,
+    seed_val INT DEFAULT 12345  -- optional seed for deterministic geometry modifications
 )
 RETURNS TABLE (
     selected_tiles    INT,
@@ -165,22 +208,35 @@ DECLARE
     ins_per_tile          INT  := 2;     -- points to insert per tile
     del_count             INT;
     upd_count             INT;
+    -- Deterministic random values for geometry modifications
+    tile_seed             BIGINT;
+    rand_x1               FLOAT8;
+    rand_y1               FLOAT8;
+    rand_x2               FLOAT8;
+    rand_y2               FLOAT8;
+    rand_translate_x      FLOAT8;
+    rand_translate_y      FLOAT8;
+    rand_buffer           FLOAT8;
+    point_idx             INT;
 BEGIN
     RAISE NOTICE
-        'Starting interactive tile simulation (%.1f%% of tiles at zoom %)…',
-        pct * 100, z;
+        'Starting interactive tile simulation (%.1f%% of tiles at zoom %) with seed %…',
+        pct * 100, z, seed_val;
 
-    FOR t IN SELECT * FROM pick_tiles_for_tick(z, pct)
+    FOR t IN SELECT * FROM pick_tiles_for_tick(z, pct, seed_val)
     LOOP
         tile_count := tile_count + 1;
         env := ST_TileEnvelope(z, t.x, t.y);
 
-        -- Delete up to 2 points inside the tile
+        -- Generate deterministic seed for this specific tile based on coordinates and simulation parameters
+        tile_seed := seed_val + (t.x * 1000) + (t.y * 100000) + (z * 10000000) + floor(pct * 1000000);
+
+        -- Delete up to 2 points inside the tile (deterministic selection)
         WITH candidates AS (
             SELECT id
             FROM demo_points
             WHERE geom && env AND ST_Intersects(geom, env)
-            ORDER BY random()
+            ORDER BY id  -- Deterministic ordering by ID
             LIMIT 2
         ),
         deleted AS (
@@ -193,31 +249,41 @@ BEGIN
 
         total_points_deleted := total_points_deleted + del_count;
 
-        -- Insert new points
-        INSERT INTO demo_points(geom, demo_tag)
-        SELECT
-            ST_SetSRID(
-                ST_MakePoint(
-                    ST_XMin(env) + random() * (ST_XMax(env)-ST_XMin(env)),
-                    ST_YMin(env) + random() * (ST_YMax(env)-ST_YMin(env))
-                ), 3857
-            ),
-            format(
-                'sim_%s_point_%s_%s',
-                extract(epoch FROM now())::INT,
-                t.x, t.y
-            )
-        FROM generate_series(1, ins_per_tile);
+        -- Insert new points with deterministic coordinates
+        FOR point_idx IN 1..ins_per_tile LOOP
+            -- Generate deterministic random values for each point
+            rand_x1 := seeded_random(tile_seed + point_idx);
+            rand_y1 := seeded_random(tile_seed + point_idx + 1000);
+            
+            INSERT INTO demo_points(geom, demo_tag)
+            VALUES (
+                ST_SetSRID(
+                    ST_MakePoint(
+                        ST_XMin(env) + rand_x1 * (ST_XMax(env)-ST_XMin(env)),
+                        ST_YMin(env) + rand_y1 * (ST_YMax(env)-ST_YMin(env))
+                    ), 3857
+                ),
+                format(
+                    'sim_%s_point_%s_%s_%s',
+                    seed_val,
+                    t.x, t.y, point_idx
+                )
+            );
+        END LOOP;
 
         total_points_inserted := total_points_inserted + ins_per_tile;
 
-        -- Slightly translate the tile's line (stay within tile)
+        -- Generate deterministic translation values for lines
+        rand_translate_x := seeded_random(tile_seed + 2000) - 0.5;
+        rand_translate_y := seeded_random(tile_seed + 3000) - 0.5;
+
+        -- Slightly translate the tile's line (stay within tile) - deterministic
         WITH updated_lines AS (
             UPDATE demo_lines
             SET  geom       = ST_Translate(
                                 geom,
-                                (random()-0.5) * 60,
-                                (random()-0.5) * 60
+                                rand_translate_x * 60,
+                                rand_translate_y * 60
                               ),
                  updated_at = now()
             WHERE demo_tag = format('tile_%s_%s_line', t.x, t.y)
@@ -228,12 +294,15 @@ BEGIN
 
         total_lines_updated := total_lines_updated + upd_count;
 
-        -- Adjust the polygon size a bit (stay within tile)
+        -- Generate deterministic buffer value for polygons
+        rand_buffer := seeded_random(tile_seed + 4000) - 0.5;
+
+        -- Adjust the polygon size a bit (stay within tile) - deterministic
         WITH updated_polygons AS (
             UPDATE demo_polygons
             SET  geom       = ST_Buffer(
                                 ST_Centroid(geom),
-                                GREATEST(50, LEAST(180, 180 + (random()-0.5) * 100))
+                                GREATEST(50, LEAST(180, 180 + rand_buffer * 100))
                               ),
                  updated_at = now()
             WHERE demo_tag = format('tile_%s_%s_polygon', t.x, t.y)
@@ -262,7 +331,12 @@ BEGIN
         total_polygons_updated;
 
     -- Notify the worker that tiles are ready for processing
+    RAISE NOTICE 'Sending NOTIFY tiles_updated signal to worker...';
     NOTIFY tiles_updated;
+    RAISE NOTICE 'NOTIFY signal sent successfully';
+    
+    -- Small delay to ensure notification is processed
+    PERFORM pg_sleep(0.1);
 
     RETURN NEXT;
 END;
@@ -292,7 +366,7 @@ RETURNS TABLE (
 LANGUAGE sql AS $$
     WITH picked AS (
         SELECT COUNT(*)::NUMERIC AS sel
-        FROM   pick_tiles_for_tick(z, pct)
+        FROM   pick_tiles_for_tick(z, pct, 12345)
     ),
     total AS (
         SELECT ((1 << z)^2)::NUMERIC AS ttl   -- e.g. 65 536 for z8
@@ -314,7 +388,7 @@ CREATE OR REPLACE FUNCTION show_current_tick_tiles(
 RETURNS TABLE (tile_x INT, tile_y INT)
 LANGUAGE sql AS $$
     SELECT x, y
-    FROM   pick_tiles_for_tick(z, pct)
+    FROM   pick_tiles_for_tick(z, pct, 12345)
     ORDER  BY x, y
     LIMIT  20;
 $$;
