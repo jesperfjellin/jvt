@@ -5,6 +5,7 @@ pub mod tiles;
 pub mod worker;
 
 // Re-export common types
+pub use api::ApiServer;
 pub use config::Config;
 
 /// Core tile coordinate representation  

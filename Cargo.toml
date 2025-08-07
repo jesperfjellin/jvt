@@ -14,7 +14,7 @@ tower-http = { version = "0.6.2", features = ["cors"] }
 
 # Database connectivity  
 tokio-postgres = "0.7.10"
-postgres-types = "0.2.6"
+postgres-types = { version = "0.2.6", features = ["derive", "with-uuid-1"] }
 
 # Vector tile generation
 mvt = "0.10.3"
@@ -43,7 +43,11 @@ config = "0.14.0"
 
 # Utilities
 chrono = { version = "0.4.31", features = ["serde"] }
-uuid = { version = "1.6.1", features = ["v4"] }
+uuid = { version = "1.6.1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+# Test dependencies
+tokio-test = "0.4.4"
 
 
 

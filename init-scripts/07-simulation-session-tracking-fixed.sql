@@ -34,7 +34,7 @@ CREATE OR REPLACE FUNCTION create_simulation_session(
     p_created_by TEXT DEFAULT 'system'
 )
 RETURNS TABLE (
-    session_id UUID,
+    session_id TEXT,
     success BOOLEAN,
     message TEXT
 )
@@ -84,7 +84,7 @@ BEGIN
     RETURNING id INTO new_session_id;
     
     -- Return success
-    session_id := new_session_id;
+    session_id := new_session_id::TEXT;
     success := TRUE;
     message := format('Simulation session %s created successfully', new_session_id);
     
@@ -100,7 +100,7 @@ $$;
 --  Updates simulation session status and heartbeat
 -----------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION update_simulation_session(
-    p_session_id UUID,
+    p_session_id TEXT,
     p_status TEXT DEFAULT NULL,
     p_heartbeat BOOLEAN DEFAULT TRUE
 )
@@ -111,11 +111,11 @@ DECLARE
     old_status TEXT;
 BEGIN
     -- Check if session exists and get current status
-    SELECT EXISTS(SELECT 1 FROM simulation_sessions WHERE id = p_session_id),
+    SELECT EXISTS(SELECT 1 FROM simulation_sessions WHERE id = p_session_id::UUID),
            status
     INTO session_exists, old_status
     FROM simulation_sessions
-    WHERE id = p_session_id;
+    WHERE id = p_session_id::UUID;
     
     IF NOT session_exists THEN
         RAISE WARNING 'Simulation session % does not exist', p_session_id;
@@ -130,7 +130,7 @@ BEGIN
         completed_at = CASE WHEN p_status IN ('completed', 'failed', 'cancelled', 'reset') 
                            THEN NOW() 
                            ELSE completed_at END
-    WHERE id = p_session_id;
+    WHERE id = p_session_id::UUID;
     
     IF p_status IS NOT NULL AND p_status != old_status THEN
         RAISE NOTICE 'Simulation session % status changed: % -> %', p_session_id, old_status, p_status;
@@ -145,7 +145,7 @@ $$;
 --  Properly cleanup a specific simulation session
 -----------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION cleanup_simulation_session(
-    p_session_id UUID,
+    p_session_id TEXT,
     p_final_status TEXT DEFAULT 'completed'
 )
 RETURNS BOOLEAN
@@ -155,11 +155,11 @@ DECLARE
     session_snapshot TEXT;
 BEGIN
     -- Check if session exists and get snapshot info
-    SELECT EXISTS(SELECT 1 FROM simulation_sessions WHERE id = p_session_id),
+    SELECT EXISTS(SELECT 1 FROM simulation_sessions WHERE id = p_session_id::UUID),
            snapshot_id
     INTO session_exists, session_snapshot
     FROM simulation_sessions
-    WHERE id = p_session_id;
+    WHERE id = p_session_id::UUID;
     
     IF NOT session_exists THEN
         RAISE WARNING 'Simulation session % does not exist', p_session_id;
@@ -171,7 +171,7 @@ BEGIN
     SET 
         status = p_final_status,
         completed_at = NOW()
-    WHERE id = p_session_id;
+    WHERE id = p_session_id::UUID;
     
     -- Optional: cleanup associated snapshot if it's not a baseline
     IF session_snapshot IS NOT NULL THEN
@@ -202,13 +202,13 @@ CREATE OR REPLACE FUNCTION cleanup_expired_sessions()
 RETURNS INT
 LANGUAGE plpgsql AS $$
 DECLARE
-    expired_sessions UUID[];
-    session_id UUID;
+    expired_sessions TEXT[];
+    session_id TEXT;
     cleanup_count INT := 0;
 BEGIN
     -- Find expired sessions
     SELECT ARRAY(
-        SELECT id
+        SELECT id::TEXT
         FROM simulation_sessions
         WHERE status IN ('starting', 'processing')
           AND (timeout_at < NOW() OR last_heartbeat < NOW() - INTERVAL '30 minutes')
@@ -234,7 +234,7 @@ $$;
 -----------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION get_active_simulation_sessions()
 RETURNS TABLE (
-    session_id UUID,
+    session_id TEXT,
     percentage FLOAT8,
     status TEXT,
     started_at TIMESTAMPTZ,
@@ -245,7 +245,7 @@ RETURNS TABLE (
 )
 LANGUAGE sql AS $$
     SELECT 
-        id,
+        id::TEXT,
         percentage,
         status,
         started_at,
@@ -279,7 +279,7 @@ $$;
 --  Cancel a running simulation session
 -----------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION cancel_simulation_session(
-    p_session_id UUID
+    p_session_id TEXT
 )
 RETURNS BOOLEAN
 LANGUAGE plpgsql AS $$
@@ -289,7 +289,7 @@ BEGIN
     -- Get current session status
     SELECT status INTO session_status
     FROM simulation_sessions
-    WHERE id = p_session_id;
+    WHERE id = p_session_id::UUID;
     
     IF session_status IS NULL THEN
         RAISE WARNING 'Simulation session % does not exist', p_session_id;
@@ -314,10 +314,10 @@ $$;
 --  Get detailed information about a specific simulation session
 -----------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION get_simulation_session_info(
-    p_session_id UUID
+    p_session_id TEXT
 )
 RETURNS TABLE (
-    session_id UUID,
+    session_id TEXT,
     percentage FLOAT8,
     status TEXT,
     started_at TIMESTAMPTZ,
@@ -331,7 +331,7 @@ RETURNS TABLE (
 )
 LANGUAGE sql AS $$
     SELECT 
-        id,
+        id::TEXT,
         percentage,
         status,
         started_at,
@@ -348,7 +348,7 @@ LANGUAGE sql AS $$
         END AS duration_minutes,
         (timeout_at < NOW() AND status IN ('starting', 'processing')) AS is_expired
     FROM simulation_sessions
-    WHERE id = p_session_id;
+    WHERE id = p_session_id::UUID;
 $$;
 
 -----------------------------------------------------------------------

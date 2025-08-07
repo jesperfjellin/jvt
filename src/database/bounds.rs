@@ -75,7 +75,9 @@ impl BoundsDetector {
         let max_lat: Option<f64> = row.get(3);
 
         if min_lon.is_none() || min_lat.is_none() || max_lon.is_none() || max_lat.is_none() {
-            tracing::warn!("No geometry data found in configured tables - using default global bounds");
+            tracing::warn!(
+                "No geometry data found in configured tables - using default global bounds"
+            );
             // Return default global bounds for demo purposes
             let default_bounds = GeographicBounds {
                 min_lon: -180.0,

@@ -9,17 +9,31 @@ interface TileStatus {
   last_check: string
 }
 
+interface SimulationStatus {
+  is_running: boolean
+  active_sessions: Array<{
+    session_id: string
+    percentage: number
+    status: string
+    started_at: string
+    minutes_running: number
+    minutes_until_timeout: number
+  }>
+}
+
 function App() {
   const [tileStatus, setTileStatus] = useState<TileStatus | null>(null)
   const [simulationPercentage, setSimulationPercentage] = useState(7.5)
   const [isSimulating, setIsSimulating] = useState(false)
   const [mapRefreshTrigger, setMapRefreshTrigger] = useState(0)
+  const [simulationStatus, setSimulationStatus] = useState<SimulationStatus | null>(null)
 
   const fetchData = async () => {
     try {
       const tileRes = await fetch('http://localhost:8080/api/tile-status')
       if (tileRes.ok) {
         const tileData = await tileRes.json()
+        console.log('Fetched tile data:', tileData)
         setTileStatus(tileData)
       }
     } catch (error) {
@@ -27,10 +41,52 @@ function App() {
     }
   }
 
+  const fetchSimulationStatus = async () => {
+    try {
+      const statusRes = await fetch('http://localhost:8080/api/simulation-status')
+      if (statusRes.ok) {
+        const statusData = await statusRes.json()
+        setSimulationStatus(statusData)
+        return statusData
+      }
+    } catch (error) {
+      console.error('Error fetching simulation status:', error)
+    }
+    return null
+  }
+
   useEffect(() => {
     // Fetch initial data on component mount
     fetchData()
+    fetchSimulationStatus()
   }, [])
+
+  // Poll for simulation status when simulation is running
+  useEffect(() => {
+    if (!isSimulating) return
+
+    let completedCount = 0
+    const pollInterval = setInterval(async () => {
+      const status = await fetchSimulationStatus()
+      console.log('Polling simulation status:', status)
+      
+      if (status && !status.is_running && status.active_sessions.length === 0) {
+        completedCount++
+        // Wait for 2 consecutive polls to confirm completion
+        if (completedCount >= 2) {
+          // Simulation completed, refresh data and stop polling
+          setIsSimulating(false)
+          fetchData()
+          setMapRefreshTrigger(Date.now())
+          console.log('Simulation completed, data refreshed automatically')
+        }
+      } else {
+        completedCount = 0
+      }
+    }, 1000) // Poll every second
+
+    return () => clearInterval(pollInterval)
+  }, [isSimulating])
 
   const formatTime = (freshCount: number) => {
     const estimatedTime = Math.max(0.1, freshCount * 0.0006)
@@ -69,17 +125,23 @@ function App() {
 
       if (response.ok) {
         console.log(`Started simulation with ${simulationPercentage}% of tiles`)
-        // Refresh both main data and map after simulation completes
+        // The polling useEffect will handle the completion
+        
+        // Fallback: refresh data after 10 seconds regardless of polling
         setTimeout(() => {
-          fetchData()
-          setMapRefreshTrigger(Date.now())
-        }, 3000)
+          if (isSimulating) {
+            console.log('Fallback: refreshing data after timeout')
+            setIsSimulating(false)
+            fetchData()
+            setMapRefreshTrigger(Date.now())
+          }
+        }, 10000)
       } else {
         console.error('Failed to start simulation:', response.status)
+        setIsSimulating(false)
       }
     } catch (error) {
       console.error('Error starting simulation:', error)
-    } finally {
       setIsSimulating(false)
     }
   }
@@ -266,6 +328,27 @@ function App() {
                 >
                   {isSimulating ? 'Processing...' : 'Run Simulation'}
                 </button>
+
+                {/* Simulation Progress Indicator */}
+                {isSimulating && simulationStatus?.active_sessions && simulationStatus.active_sessions.length > 0 && (
+                  <div className="mt-3 p-3 bg-white/10 backdrop-blur-sm border border-cyan-300/20 rounded-lg">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-xs text-cyan-200">Simulation Progress</span>
+                      <span className="text-xs text-white">
+                        {simulationStatus?.active_sessions[0]?.percentage?.toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-white/20 rounded-full h-2">
+                      <div 
+                        className="bg-gradient-to-r from-cyan-500 to-fuchsia-500 h-2 rounded-full transition-all duration-300"
+                        style={{ width: `${simulationStatus?.active_sessions[0]?.percentage || 0}%` }}
+                      />
+                    </div>
+                    <div className="text-xs text-slate-300 mt-1">
+                      Status: {simulationStatus?.active_sessions[0]?.status || 'Unknown'}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 

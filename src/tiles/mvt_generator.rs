@@ -100,7 +100,10 @@ impl MvtGenerator {
                 // Check if this is just an empty tile (no geometry data)
                 let error_msg = e.to_string();
                 if error_msg.contains("query_one failed") || error_msg.contains("no rows") {
-                    tracing::debug!("Tile {} has no geometry data, returning empty tile", coord.to_string());
+                    tracing::debug!(
+                        "Tile {} has no geometry data, returning empty tile",
+                        coord.to_string()
+                    );
                     Ok(vec![])
                 } else {
                     tracing::warn!("Failed to generate MVT tile {}: {}", coord.to_string(), e);
@@ -124,7 +127,10 @@ impl MvtGenerator {
                     // Check if this is just an empty tile (no geometry data)
                     let error_msg = e.to_string();
                     if error_msg.contains("query_one failed") || error_msg.contains("no rows") {
-                        tracing::debug!("Tile {} has no geometry data, generating empty tile", coord.to_string());
+                        tracing::debug!(
+                            "Tile {} has no geometry data, generating empty tile",
+                            coord.to_string()
+                        );
                     } else {
                         tracing::warn!("Failed to generate tile {}: {}", coord.to_string(), e);
                     }

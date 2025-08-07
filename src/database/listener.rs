@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use tokio::time::{Duration, timeout};
+use tokio::time::Duration;
 use tokio_postgres::{Client, NoTls};
 use tracing::{debug, error, info};
 

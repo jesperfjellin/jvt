@@ -55,7 +55,7 @@ impl DatabaseTileProcessor {
 
         // Process tiles in batches of 5000 for better efficiency while keeping memory usage reasonable
         let batch_size = 5000i32;
-        let query = "SELECT z, x, y, count FROM get_pending_tiles($1)";
+        let query = "SELECT z, x, y, count FROM get_simulation_pending_tiles($1)";
         let rows = self
             .database
             .query(query, &[&batch_size])
@@ -107,30 +107,19 @@ impl DatabaseTileProcessor {
 
         info!("Marking {} tiles as processed", batch.len());
 
-        // Use a simple approach: build a WHERE clause with OR conditions
-        // This avoids complex parameter lifetime issues while still being efficient
-        let mut where_conditions = Vec::new();
+        // Mark tiles as processed by updating processed_at timestamp
         for coord in &batch.tiles {
-            where_conditions.push(format!(
-                "(z = {} AND x = {} AND y = {})",
-                coord.z as i16, coord.x as i32, coord.y as i32
-            ));
+            let query = "UPDATE simulation_tiles SET processed_at = NOW() WHERE z = $1 AND x = $2 AND y = $3";
+            self.database
+                .execute(query, &[&(coord.z as i16), &(coord.x as i32), &(coord.y as i32)])
+                .await
+                .context("Failed to update tile processed_at timestamp")?;
         }
 
-        let where_clause = where_conditions.join(" OR ");
-        let query = format!(
-            "UPDATE changed_tiles SET processed_at = NOW() 
-             WHERE ({}) AND processed_at IS NULL",
-            where_clause
+        info!(
+            "Processed {} tiles",
+            batch.len()
         );
-
-        let updated_count = self
-            .database
-            .execute(&query, &[])
-            .await
-            .context("Failed to mark tiles as processed")?;
-
-        info!("Marked {} tile changes as processed in single batch", updated_count);
         Ok(())
     }
 
@@ -184,13 +173,16 @@ impl DatabaseTileProcessor {
     /// Reset tile status to baseline for next simulation
     pub async fn reset_to_baseline(&self) -> Result<u64> {
         info!("Resetting tile status to baseline for next simulation...");
-        
+
         // Clear all processed tiles to reset to baseline state
         let reset_query = "DELETE FROM changed_tiles WHERE processed_at IS NOT NULL";
         let reset_count = self.database.execute(reset_query, &[]).await?;
-        
-        info!("Cleared {} processed tiles - system reset to baseline", reset_count);
-        
+
+        info!(
+            "Cleared {} processed tiles - system reset to baseline",
+            reset_count
+        );
+
         Ok(reset_count)
     }
 }

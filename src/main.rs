@@ -28,6 +28,14 @@ async fn main() -> Result<()> {
     database.health_check().await?;
     info!("Database health check passed");
 
+    // Clear simulation tiles for fresh start
+    let clear_query = "SELECT public.clear_simulation_tiles()";
+    if let Err(e) = database.query(clear_query, &[]).await {
+        warn!("Failed to clear simulation tiles on startup: {:#}", e);
+    } else {
+        info!("Cleared simulation tiles on startup");
+    }
+
     // Create notification listener
     let mut listener =
         NotificationListener::new(&config.database.url, &config.database.notification_channel)
@@ -116,23 +124,25 @@ async fn run_worker_loop(
 
     loop {
         // Wait for notifications with short timeout as fallback
-        match listener.wait_for_notification(Duration::from_secs(5)).await
-        {
+        match listener.wait_for_notification(Duration::from_secs(5)).await {
             Ok(Some(notification)) => {
                 info!(
                     "Received change notification: {} bytes payload - processing immediately",
                     notification.payload.len()
                 );
-                
+
                 // Process tiles immediately when notification is received
                 match process_pending_tiles_batch(processor, mvt_generator, pmtiles_writer).await {
                     Ok(processed_count) => {
                         if processed_count > 0 {
-                            info!("Successfully processed {} tiles from notification", processed_count);
-                            
+                            info!(
+                                "Successfully processed {} tiles from notification",
+                                processed_count
+                            );
+
                             // Wait a bit for the frontend to fetch the results
                             tokio::time::sleep(Duration::from_secs(10)).await;
-                            
+
                             // Reset tile status for next simulation
                             match processor.reset_to_baseline().await {
                                 Ok(reset_count) => {
@@ -152,12 +162,15 @@ async fn run_worker_loop(
             Ok(None) => {
                 // Timeout occurred - check for pending tiles (notifications may not be working)
                 tracing::debug!("Checking for pending tiles...");
-                
+
                 // Check if there are any pending tiles that we missed
                 match process_pending_tiles_batch(processor, mvt_generator, pmtiles_writer).await {
                     Ok(processed_count) => {
                         if processed_count > 0 {
-                            warn!("Found {} pending tiles that weren't triggered by notification!", processed_count);
+                            warn!(
+                                "Found {} pending tiles that weren't triggered by notification!",
+                                processed_count
+                            );
                         } else {
                             tracing::debug!("No pending tiles found during timeout check");
                         }
@@ -184,7 +197,7 @@ async fn process_pending_tiles_batch(
 ) -> Result<usize> {
     let mut total_processed = 0;
     let mut batch_count = 0;
-    
+
     loop {
         // Get next batch of pending tiles from the database
         let batch = processor.get_pending_tiles().await?;
@@ -194,7 +207,11 @@ async fn process_pending_tiles_batch(
         }
 
         batch_count += 1;
-        info!("Processing {} tiles from simulation (chunk #{})...", batch.len(), batch_count);
+        info!(
+            "Processing {} tiles from simulation (chunk #{})...",
+            batch.len(),
+            batch_count
+        );
 
         // Convert batch tiles to a vector for MVT generation
         let tile_coords: Vec<_> = batch.tiles.iter().cloned().collect();
@@ -211,17 +228,28 @@ async fn process_pending_tiles_batch(
         processor.mark_tiles_processed(&batch).await?;
 
         total_processed += batch.len();
-        info!("Completed chunk #{} with {} tiles (total: {})", batch_count, batch.len(), total_processed);
+        info!(
+            "Completed chunk #{} with {} tiles (total: {})",
+            batch_count,
+            batch.len(),
+            total_processed
+        );
 
         // Safety check: if we've processed more than 100k tiles in one cycle, something might be wrong
         if total_processed > 100_000 {
-            warn!("Processed {} tiles in one cycle - stopping to prevent runaway processing", total_processed);
+            warn!(
+                "Processed {} tiles in one cycle - stopping to prevent runaway processing",
+                total_processed
+            );
             break;
         }
     }
 
     if total_processed > 0 {
-        info!("Completed simulation: {} total tiles processed", total_processed);
+        info!(
+            "Completed simulation: {} total tiles processed",
+            total_processed
+        );
     }
 
     Ok(total_processed)
@@ -238,5 +266,3 @@ async fn debug_worker_status() {
     // - Recent processing stats
     // - Memory usage
 }
-
-
