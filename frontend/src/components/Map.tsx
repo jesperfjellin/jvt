@@ -100,12 +100,19 @@ const Map: React.FC<MapProps> = ({ refreshTrigger, simulationBounds, autoZoomTri
     
     const topLeft = tileToLatLng(zoom, bounds.bbox_min_x, bounds.bbox_min_y)
     const bottomRight = tileToLatLng(zoom, bounds.bbox_max_x + 1, bounds.bbox_max_y + 1)
+
+    // Clamp to valid WebMercator extent and avoid exact world edges (can confuse fitBounds
+    // when renderWorldCopies is disabled)
+    const clamp = (lon: number, lat: number) => {
+      const clampedLon = Math.max(-179.999, Math.min(179.999, lon))
+      const clampedLat = Math.max(-85.051, Math.min(85.051, lat))
+      return [clampedLon, clampedLat] as [number, number]
+    }
     
     // Create bounds object for MapLibre
-    const mapBounds = new maplibregl.LngLatBounds(
-      [topLeft.lon, bottomRight.lat], // Southwest corner
-      [bottomRight.lon, topLeft.lat]  // Northeast corner
-    )
+    const sw = clamp(topLeft.lon, bottomRight.lat)
+    const ne = clamp(bottomRight.lon, topLeft.lat)
+    const mapBounds = new maplibregl.LngLatBounds(sw, ne)
     
     console.log('Auto-zooming to simulation bounds:', {
       tiles: `(${bounds.bbox_min_x},${bounds.bbox_min_y}) to (${bounds.bbox_max_x},${bounds.bbox_max_y})`,
@@ -178,6 +185,8 @@ const Map: React.FC<MapProps> = ({ refreshTrigger, simulationBounds, autoZoomTri
               'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
             ],
             tileSize: 256,
+            minzoom: 0,
+            maxzoom: 19,
             attribution: '© OpenStreetMap contributors'
           }
         },
@@ -197,10 +206,16 @@ const Map: React.FC<MapProps> = ({ refreshTrigger, simulationBounds, autoZoomTri
           }
         ]
       },
-      center: [10.75, 59.95], // Oslo, Norway
-      zoom: 10,
+      center: [0, 0],
+      zoom: 2,
+      minZoom: 0,
+      maxZoom: 19,
       bearing: 0,
-      pitch: 0
+      pitch: 0,
+      // Show a single world only (no repeating continents)
+      renderWorldCopies: false,
+      // Leave panning unconstrained to avoid odd edge-fitting effects; we still
+      // clamp bounds during fit to stay within WebMercator range.
     })
 
     // Add navigation controls
@@ -214,17 +229,38 @@ const Map: React.FC<MapProps> = ({ refreshTrigger, simulationBounds, autoZoomTri
       console.log('Map loaded successfully')
       // Fetch initial tile status
       fetchTileStatus()
+      // Ensure the map has correct size after initial layout
+      mapRef.current?.resize()
     })
 
     mapRef.current.on('error', (e: any) => {
       console.error('Map error:', e)
     })
 
+    // Proactively ensure container has non-zero size before first render
+    const ensureSized = () => {
+      const el = mapContainer.current
+      if (!el) return
+      const w = el.clientWidth
+      const h = el.clientHeight
+      if (w === 0 || h === 0) {
+        requestAnimationFrame(ensureSized)
+      } else {
+        mapRef.current?.resize()
+      }
+    }
+    ensureSized()
+
+    // Also resize on window resizes
+    const onWindowResize = () => mapRef.current?.resize()
+    window.addEventListener('resize', onWindowResize)
+
     // Cleanup function
     return () => {
       if (mapRef.current) {
         mapRef.current.remove()
       }
+      window.removeEventListener('resize', onWindowResize)
     }
   }, [])
 
@@ -271,11 +307,6 @@ const Map: React.FC<MapProps> = ({ refreshTrigger, simulationBounds, autoZoomTri
   return (
     <div className="map-component relative">
       <div ref={mapContainer} className="map" />
-      {isAutoZooming && (
-        <div className="absolute top-2 left-2 bg-black/70 text-white text-xs px-2 py-1 rounded-md z-10">
-          Auto-zooming to updated tiles...
-        </div>
-      )}
     </div>
   )
 }
