@@ -66,7 +66,7 @@ impl DatabaseTileProcessor {
         let mut tile_set = HashSet::new();
 
         for row in rows {
-            let z: i16 = row.get(0);
+            let z: i32 = row.get(0);
             let x: i32 = row.get(1);
             let y: i32 = row.get(2);
             let change_count: i64 = row.get(3);
@@ -111,7 +111,7 @@ impl DatabaseTileProcessor {
         for coord in &batch.tiles {
             let query = "UPDATE simulation_tiles SET processed_at = NOW() WHERE z = $1 AND x = $2 AND y = $3";
             self.database
-                .execute(query, &[&(coord.z as i16), &(coord.x as i32), &(coord.y as i32)])
+                .execute(query, &[&(coord.z as i32), &(coord.x as i32), &(coord.y as i32)])
                 .await
                 .context("Failed to update tile processed_at timestamp")?;
         }

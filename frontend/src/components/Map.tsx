@@ -20,12 +20,20 @@ interface TileStatusResponse {
 
 interface MapProps {
   refreshTrigger?: number; // Used to trigger refresh from parent
+  simulationBounds?: {
+    bbox_min_x: number
+    bbox_min_y: number
+    bbox_max_x: number
+    bbox_max_y: number
+  } | null;
+  autoZoomTrigger?: number; // Used to trigger auto-zoom
 }
 
-const Map: React.FC<MapProps> = ({ refreshTrigger }) => {
+const Map: React.FC<MapProps> = ({ refreshTrigger, simulationBounds, autoZoomTrigger }) => {
   const mapContainer = useRef<HTMLDivElement>(null)
   const mapRef = useRef<maplibregl.Map | null>(null)
   const [tileStatus, setTileStatus] = useState<TileStatusResponse | null>(null)
+  const [isAutoZooming, setIsAutoZooming] = useState(false)
 
   // Fetch tile status from API
   const fetchTileStatus = async () => {
@@ -41,6 +49,14 @@ const Map: React.FC<MapProps> = ({ refreshTrigger }) => {
     } catch (error) {
       console.error('Error fetching tile status:', error)
     }
+  }
+
+  // Convert tile coordinates to geographic bounds
+  const tileToLatLng = (z: number, x: number, y: number) => {
+    const n = Math.pow(2, z)
+    const lon = (x / n) * 360 - 180
+    const lat = Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) * (180 / Math.PI)
+    return { lon, lat }
   }
 
   // Convert tile coordinates to GeoJSON polygon
@@ -72,6 +88,41 @@ const Map: React.FC<MapProps> = ({ refreshTrigger }) => {
         last_updated: tile.last_updated
       }
     }
+  }
+
+  // Auto-zoom to simulation bounds
+  const zoomToSimulationBounds = (map: maplibregl.Map, bounds: NonNullable<typeof simulationBounds>) => {
+    setIsAutoZooming(true)
+    
+    // Convert tile coordinates to geographic bounds
+    // Assuming zoom level 8 based on the system configuration
+    const zoom = 8
+    
+    const topLeft = tileToLatLng(zoom, bounds.bbox_min_x, bounds.bbox_min_y)
+    const bottomRight = tileToLatLng(zoom, bounds.bbox_max_x + 1, bounds.bbox_max_y + 1)
+    
+    // Create bounds object for MapLibre
+    const mapBounds = new maplibregl.LngLatBounds(
+      [topLeft.lon, bottomRight.lat], // Southwest corner
+      [bottomRight.lon, topLeft.lat]  // Northeast corner
+    )
+    
+    console.log('Auto-zooming to simulation bounds:', {
+      tiles: `(${bounds.bbox_min_x},${bounds.bbox_min_y}) to (${bounds.bbox_max_x},${bounds.bbox_max_y})`,
+      geographic: `(${topLeft.lon.toFixed(4)},${bottomRight.lat.toFixed(4)}) to (${bottomRight.lon.toFixed(4)},${topLeft.lat.toFixed(4)})`
+    })
+    
+    // Fit the map to the bounds with some padding
+    map.fitBounds(mapBounds, {
+      padding: 20,
+      duration: 1000, // 1 second animation
+      essential: true
+    })
+    
+    // Clear the auto-zoom indicator after animation completes
+    setTimeout(() => {
+      setIsAutoZooming(false)
+    }, 1200)
   }
 
   // Update map with tile overlay
@@ -191,9 +242,40 @@ const Map: React.FC<MapProps> = ({ refreshTrigger }) => {
     }
   }, [refreshTrigger])
 
+  // Auto-zoom when explicitly triggered
+  useEffect(() => {
+    if (!simulationBounds || !autoZoomTrigger || autoZoomTrigger <= 0) return
+    const map = mapRef.current
+    if (!map) return
+
+    const run = () => {
+      // Small delay to ensure tile overlay is updated first
+      setTimeout(() => {
+        if (mapRef.current) {
+          zoomToSimulationBounds(mapRef.current, simulationBounds)
+        }
+      }, 300)
+    }
+
+    if (map.isStyleLoaded()) {
+      run()
+    } else {
+      const onLoad = () => {
+        run()
+        map.off('load', onLoad)
+      }
+      map.on('load', onLoad)
+    }
+  }, [autoZoomTrigger, simulationBounds])
+
   return (
-    <div className="map-component">
+    <div className="map-component relative">
       <div ref={mapContainer} className="map" />
+      {isAutoZooming && (
+        <div className="absolute top-2 left-2 bg-black/70 text-white text-xs px-2 py-1 rounded-md z-10">
+          Auto-zooming to updated tiles...
+        </div>
+      )}
     </div>
   )
 }

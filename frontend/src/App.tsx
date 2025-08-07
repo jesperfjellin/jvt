@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Map from './components/Map'
 import './App.css'
 
@@ -21,12 +21,36 @@ interface SimulationStatus {
   }>
 }
 
+interface SimulationResult {
+  message: string
+  percentage: number
+  estimated_tiles: number
+  session_id: string | null
+  bbox_min_x: number
+  bbox_min_y: number
+  bbox_max_x: number
+  bbox_max_y: number
+}
+
 function App() {
   const [tileStatus, setTileStatus] = useState<TileStatus | null>(null)
   const [simulationPercentage, setSimulationPercentage] = useState(7.5)
   const [isSimulating, setIsSimulating] = useState(false)
   const [mapRefreshTrigger, setMapRefreshTrigger] = useState(0)
   const [simulationStatus, setSimulationStatus] = useState<SimulationStatus | null>(null)
+  const [lastSimulationBounds, setLastSimulationBounds] = useState<{
+    bbox_min_x: number
+    bbox_min_y: number
+    bbox_max_x: number
+    bbox_max_y: number
+  } | null>(null)
+  const [autoZoomTrigger, setAutoZoomTrigger] = useState(0)
+  const lastBoundsRef = useRef<typeof lastSimulationBounds>(null)
+
+  // Keep a ref to the latest bounds to avoid stale closures
+  useEffect(() => {
+    lastBoundsRef.current = lastSimulationBounds
+  }, [lastSimulationBounds])
 
   const fetchData = async () => {
     try {
@@ -34,6 +58,7 @@ function App() {
       if (tileRes.ok) {
         const tileData = await tileRes.json()
         console.log('Fetched tile data:', tileData)
+        console.log(`Fresh tiles: ${tileData.fresh_count}, Stale tiles: ${tileData.stale_count}`)
         setTileStatus(tileData)
       }
     } catch (error) {
@@ -79,6 +104,13 @@ function App() {
           fetchData()
           setMapRefreshTrigger(Date.now())
           console.log('Simulation completed, data refreshed automatically')
+          
+          // Trigger auto-zoom after a short delay to ensure data is refreshed
+          setTimeout(() => {
+            if (lastBoundsRef.current) {
+              setAutoZoomTrigger(Date.now())
+            }
+          }, 1000) // Wait 1 second for data to refresh
         }
       } else {
         completedCount = 0
@@ -124,7 +156,24 @@ function App() {
       })
 
       if (response.ok) {
+        const simulationResult: SimulationResult = await response.json()
         console.log(`Started simulation with ${simulationPercentage}% of tiles`)
+        console.log('Simulation bounding box:', {
+          bbox_min_x: simulationResult.bbox_min_x,
+          bbox_min_y: simulationResult.bbox_min_y,
+          bbox_max_x: simulationResult.bbox_max_x,
+          bbox_max_y: simulationResult.bbox_max_y
+        })
+        
+        // Store the bounding box for auto-zoom (but don't trigger it yet)
+        // We'll trigger the auto-zoom when the simulation completes
+        setLastSimulationBounds({
+          bbox_min_x: simulationResult.bbox_min_x,
+          bbox_min_y: simulationResult.bbox_min_y,
+          bbox_max_x: simulationResult.bbox_max_x,
+          bbox_max_y: simulationResult.bbox_max_y
+        })
+        
         // The polling useEffect will handle the completion
         
         // Fallback: refresh data after 10 seconds regardless of polling
@@ -370,7 +419,11 @@ function App() {
                 </div>
               </div>
               <div className="h-80 w-full rounded-lg overflow-hidden border border-white/10">
-                <Map refreshTrigger={mapRefreshTrigger} />
+                <Map 
+                  refreshTrigger={mapRefreshTrigger} 
+                  simulationBounds={lastSimulationBounds}
+                  autoZoomTrigger={autoZoomTrigger}
+                />
               </div>
             </div>
 

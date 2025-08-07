@@ -72,7 +72,7 @@ impl MvtGenerator {
             .database
             .query_one(
                 mvt_query,
-                &[&(coord.z as i16), &(coord.x as i32), &(coord.y as i32)],
+                &[&(coord.z as i32), &(coord.x as i32), &(coord.y as i32)],
             )
             .await;
 
