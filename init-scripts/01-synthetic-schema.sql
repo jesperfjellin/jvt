@@ -46,7 +46,7 @@ CREATE INDEX IF NOT EXISTS idx_demo_polygons_geom ON demo_polygons USING GIST (g
 -----------------------------
 CREATE TABLE IF NOT EXISTS changed_tiles (
     id           BIGSERIAL  PRIMARY KEY,
-    z            SMALLINT   NOT NULL,
+    z            INT        NOT NULL,
     x            INT        NOT NULL,
     y            INT        NOT NULL,
     source_table TEXT       NOT NULL,
@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS changed_tiles (
 );
 
 -- **Single authoritative index – guarantees 1 row per tile**
+-- Drop existing index if it exists with wrong data type
+DROP INDEX IF EXISTS changed_tiles_zxy_unique;
+
 CREATE UNIQUE INDEX IF NOT EXISTS changed_tiles_zxy_unique
 ON changed_tiles (z, x, y);
 
@@ -69,8 +72,8 @@ WHERE processed_at IS NULL;
 -----------------------------
 CREATE TABLE IF NOT EXISTS changed_tile_batches (
     id         BIGSERIAL PRIMARY KEY,
-    first_z    SMALLINT,
-    last_z     SMALLINT,
+    first_z    INT,
+    last_z     INT,
     tile_count INT,
     started_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
@@ -141,7 +144,25 @@ $$;
 --  Helper: fetch pending tiles in batches
 -----------------------------
 CREATE OR REPLACE FUNCTION get_pending_tiles(batch_limit INT DEFAULT 1000)
-RETURNS TABLE (z SMALLINT, x INT, y INT, count BIGINT)
+RETURNS TABLE (z INT, x INT, y INT, count BIGINT)
+LANGUAGE plpgsql AS $$
+BEGIN
+    RETURN QUERY
+    SELECT  ct.z,
+            ct.x,
+            ct.y,
+            COUNT(*) AS count
+    FROM   changed_tiles ct
+    WHERE  ct.processed_at IS NULL
+    GROUP  BY ct.z, ct.x, ct.y
+    ORDER  BY MIN(ct.changed_at)
+    LIMIT  batch_limit;
+END;
+$$;
+
+-- Create the function that the Rust code is actually calling
+CREATE OR REPLACE FUNCTION get_simulation_pending_tiles(batch_limit INT DEFAULT 1000)
+RETURNS TABLE (z INT, x INT, y INT, count BIGINT)
 LANGUAGE plpgsql AS $$
 BEGIN
     RETURN QUERY
@@ -167,3 +188,34 @@ ALTER SYSTEM SET effective_cache_size = '1GB';
 
 -- Reload
 SELECT pg_reload_conf();
+
+-----------------------------
+--  Data type migration
+-----------------------------
+-- Fix data types if tables already exist
+DO $$
+BEGIN
+    -- Fix changed_tiles.z from SMALLINT to INT
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'changed_tiles' 
+        AND column_name = 'z' 
+        AND data_type = 'smallint'
+    ) THEN
+        ALTER TABLE changed_tiles ALTER COLUMN z TYPE INT;
+        RAISE NOTICE 'Updated changed_tiles.z from SMALLINT to INT';
+    END IF;
+    
+    -- Fix changed_tile_batches.first_z from SMALLINT to INT
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name = 'changed_tile_batches' 
+        AND column_name = 'first_z' 
+        AND data_type = 'smallint'
+    ) THEN
+        ALTER TABLE changed_tile_batches ALTER COLUMN first_z TYPE INT;
+        ALTER TABLE changed_tile_batches ALTER COLUMN last_z TYPE INT;
+        RAISE NOTICE 'Updated changed_tile_batches z columns from SMALLINT to INT';
+    END IF;
+END;
+$$;

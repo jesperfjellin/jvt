@@ -172,7 +172,7 @@ impl ApiServer {
         // Build a map of tile coordinates to freshness status and change intensity
         let mut tile_freshness = std::collections::HashMap::new();
         for row in rows {
-            let z: i16 = row.get(0); // smallint in PostgreSQL
+            let z: i32 = row.get(0); // smallint in PostgreSQL
             let x: i32 = row.get(1);
             let y: i32 = row.get(2);
             let last_processed: Option<SystemTime> = row.get(3);
@@ -354,6 +354,10 @@ struct SimulationResponse {
     percentage: f64,
     estimated_tiles: u32,
     session_id: Option<String>,
+    bbox_min_x: i32,
+    bbox_min_y: i32,
+    bbox_max_x: i32,
+    bbox_max_y: i32,
 }
 
 /// Response for simulation status endpoint
@@ -413,6 +417,10 @@ async fn run_simulation(
             percentage: percentage * 100.0,
             estimated_tiles: 0,
             session_id: None,
+            bbox_min_x: 0,
+            bbox_min_y: 0,
+            bbox_max_x: 0,
+            bbox_max_y: 0,
         }));
     }
 
@@ -459,10 +467,15 @@ async fn run_simulation(
             let points_inserted: i32 = row.get(2);
             let lines_updated: i32 = row.get(3);
             let polygons_updated: i32 = row.get(4);
+            let bbox_min_x: i32 = row.get(5);
+            let bbox_min_y: i32 = row.get(6);
+            let bbox_max_x: i32 = row.get(7);
+            let bbox_max_y: i32 = row.get(8);
 
             info!(
-                "Simulation completed successfully: {} tiles, {} points deleted, {} points inserted, {} lines updated, {} polygons updated",
-                selected_tiles, points_deleted, points_inserted, lines_updated, polygons_updated
+                "Simulation completed successfully: {} tiles, {} points deleted, {} points inserted, {} lines updated, {} polygons updated, bbox: ({},{}) to ({},{})",
+                selected_tiles, points_deleted, points_inserted, lines_updated, polygons_updated,
+                bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y
             );
 
             // Step 5: Mark session as completed
@@ -487,6 +500,10 @@ async fn run_simulation(
                 percentage: percentage * 100.0,
                 estimated_tiles: selected_tiles as u32,
                 session_id: Some(session_id_str),
+                bbox_min_x,
+                bbox_min_y,
+                bbox_max_x,
+                bbox_max_y,
             }))
         }
         Err(e) => {

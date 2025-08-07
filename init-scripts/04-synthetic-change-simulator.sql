@@ -1,9 +1,56 @@
--- 04-synthetic-change-simulator.sql (FIXED)
--- User‑initiated simulation for JVT demo
+/* ================================================================
+   04-synthetic-change-simulation.sql
+   Complete JVT simulation schema (tables + functions)
+   Last updated: 2025-08-07
+   ================================================================ */
 
-/* --------------------------------------------------------------------
+/* ----------------------------------------------------------------
+   Ensure PostGIS is available
+----------------------------------------------------------------- */
+CREATE EXTENSION IF NOT EXISTS postgis;
+
+/* ----------------------------------------------------------------
+   Metadata tables required by the worker
+----------------------------------------------------------------- */
+CREATE TABLE IF NOT EXISTS simulation_tiles (
+    z INT NOT NULL,
+    x INT NOT NULL,
+    y INT NOT NULL,
+    PRIMARY KEY (z, x, y)
+);
+
+CREATE TABLE IF NOT EXISTS changed_tiles (
+    z INT NOT NULL,
+    x INT NOT NULL,
+    y INT NOT NULL,
+    source_table  TEXT NOT NULL,
+    operation     TEXT NOT NULL,
+    changed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    processed_at  TIMESTAMPTZ,
+    PRIMARY KEY (z, x, y)
+);
+
+/* ----------------------------------------------------------------
+   Utility functions the worker invokes on start-up
+----------------------------------------------------------------- */
+CREATE OR REPLACE FUNCTION clear_simulation_tiles()
+RETURNS VOID
+LANGUAGE plpgsql AS $$
+BEGIN
+    DELETE FROM simulation_tiles;
+    DELETE FROM changed_tiles WHERE source_table = 'simulation';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION is_simulation_running()
+RETURNS BOOLEAN
+LANGUAGE sql AS $$
+    SELECT EXISTS (SELECT 1 FROM simulation_tiles LIMIT 1);
+$$;
+
+/* ----------------------------------------------------------------
    Helper: seeded_random(seed_val BIGINT) → FLOAT8
--------------------------------------------------------------------- */
+----------------------------------------------------------------- */
 CREATE OR REPLACE FUNCTION seeded_random(seed_val BIGINT)
 RETURNS FLOAT8
 LANGUAGE plpgsql AS $$
@@ -18,71 +65,133 @@ BEGIN
 END;
 $$;
 
-/* --------------------------------------------------------------------
-   Helper: pick_tiles_for_tick(z INT, pct FLOAT8, seed_val INT) → TABLE(x INT, y INT)
--------------------------------------------------------------------- */
+/* ----------------------------------------------------------------
+   Helper: pick_tiles_for_tick(z INT, pct FLOAT8, seed_val INT)
+   • Guarantees UNIQUE (z,x,y) tiles
+   • Handles pct = 1.0 (100 %) by streaming every tile once
+----------------------------------------------------------------- */
 CREATE OR REPLACE FUNCTION pick_tiles_for_tick(
-    z   INT,
-    pct FLOAT8,
+    z        INT,
+    pct      FLOAT8,
     seed_val INT DEFAULT 12345
 )
 RETURNS TABLE (x INT, y INT)
 LANGUAGE plpgsql AS $$
 DECLARE
-    n INT := 1 << z;
-    target_tiles INT;
-    current_seed BIGINT;
-    pseudo_random FLOAT8;
-    tile_x INT;
-    tile_y INT;
-    selected_count INT := 0;
+    n            INT := 1 << z;                     -- tiles per axis
+    target_tiles INT := FLOOR(n * n * pct);         -- how many to emit
+    picked       INT := 0;                          -- emitted so far
+    ----------------------------------------------------------------
+    -- rectangle / RNG variables
+    current_seed BIGINT := seed_val + (z * 1000) + FLOOR(pct * 10000);
+    num_clusters INT;
+    rect_x       INT;
+    rect_y       INT;
+    rect_w       INT;
+    rect_h       INT;
 BEGIN
-    target_tiles := floor(n * n * pct);
-    current_seed := seed_val + (z * 1000) + floor(pct * 10000);
+    /* ---------- 1. Fast path: 100 % → full grid ------------------ */
+    IF pct >= 1 THEN
+        RETURN QUERY
+        SELECT i, j
+        FROM   generate_series(0, n-1) AS i,
+               generate_series(0, n-1) AS j;
+        RETURN;
+    END IF;
 
-    -- Deterministic selection with guaranteed exact count and varied placement
-    -- Use reservoir sampling approach for even distribution
-    DECLARE
-        total_tiles INT := n * n;
-        tiles_processed INT := 0;
-        remaining_tiles INT;
-        remaining_needed INT;
-        selection_probability FLOAT8;
-    BEGIN
-        FOR tile_x IN 0..n-1 LOOP
-            FOR tile_y IN 0..n-1 LOOP
-                tiles_processed := tiles_processed + 1;
-                remaining_tiles := total_tiles - tiles_processed + 1;
-                remaining_needed := target_tiles - selected_count;
-                
-                -- Calculate exact probability needed to select remaining tiles
-                selection_probability := remaining_needed::FLOAT8 / remaining_tiles::FLOAT8;
-                
-                -- Generate deterministic pseudo-random value
-                current_seed := (current_seed * 1103515245 + 12345) % 2147483648;
-                pseudo_random := (current_seed % 1000000)::FLOAT8 / 1000000.0;
-                
-                -- Select if pseudo_random is less than required probability
-                IF pseudo_random < selection_probability THEN
-                    x := tile_x;
-                    y := tile_y;
-                    selected_count := selected_count + 1;
+    /* ---------- 2. General case: clustered but unique ------------ */
+    DROP TABLE IF EXISTS _picked;
+    CREATE TEMP TABLE _picked (
+        x INT,
+        y INT,
+        PRIMARY KEY (x, y)
+    ) ON COMMIT DROP;
+
+    /* decide 4-6 clusters */
+    current_seed := (current_seed * 1103515245 + 12345) % 2147483648;
+    num_clusters := 4 + (current_seed % 3);
+
+    <<cluster_loop>>
+    FOR c IN 1..num_clusters LOOP
+        EXIT WHEN picked >= target_tiles;
+
+        /* rectangle size (10-59) trimmed to quota */
+        current_seed := (current_seed * 1103515245 + 12345) % 2147483648;
+        rect_w := LEAST(10 + (current_seed % 50), n);
+
+        current_seed := (current_seed * 1103515245 + 12345) % 2147483648;
+        rect_h := LEAST(10 + (current_seed % 50), n);
+
+        IF rect_w * rect_h > (target_tiles - picked) THEN
+            rect_w := LEAST(rect_w, target_tiles - picked);
+            rect_h := CEIL( (target_tiles - picked)::NUMERIC / rect_w );
+        END IF;
+
+        /* rectangle position */
+        current_seed := (current_seed * 1103515245 + 12345) % 2147483648;
+        rect_x := current_seed % (n - rect_w);
+
+        current_seed := (current_seed * 1103515245 + 12345) % 2147483648;
+        rect_y := current_seed % (n - rect_h);
+
+        /* emit tiles, skipping duplicates */
+        FOR tx IN rect_x .. rect_x + rect_w - 1 LOOP
+            EXIT cluster_loop WHEN picked >= target_tiles;
+            FOR ty IN rect_y .. rect_y + rect_h - 1 LOOP
+                EXIT cluster_loop WHEN picked >= target_tiles;
+                BEGIN
+                    INSERT INTO _picked VALUES (tx, ty);
+                    x := tx; y := ty;
+                    picked := picked + 1;
                     RETURN NEXT;
-                END IF;
-                
-                -- Early exit if we have all tiles we need
-                IF selected_count >= target_tiles THEN
-                    RETURN;
-                END IF;
+                EXCEPTION WHEN unique_violation THEN
+                    -- defer to fallback later
+                END;
             END LOOP;
         END LOOP;
-    END;
+    END LOOP cluster_loop;
+
+    /* ---------- 3. Fallback: fill remaining quota ---------------- */
+    WHILE picked < target_tiles LOOP
+        /* 3a. 10 random probes */
+        FOR i IN 1..10 LOOP
+            EXIT WHEN picked >= target_tiles;
+            current_seed := (current_seed * 1103515245 + 12345) % 2147483648;
+            x := current_seed % n;
+            current_seed := (current_seed * 1103515245 + 12345) % 2147483648;
+            y := current_seed % n;
+            BEGIN
+                INSERT INTO _picked VALUES (x, y);
+                picked := picked + 1;
+                RETURN NEXT;
+            EXCEPTION WHEN unique_violation THEN
+                -- keep trying
+            END;
+        END LOOP;
+
+        /* 3b. deterministic scan (guaranteed to finish) */
+        FOR tx IN 0 .. n-1 LOOP
+            EXIT WHEN picked >= target_tiles;
+            FOR ty IN 0 .. n-1 LOOP
+                EXIT WHEN picked >= target_tiles;
+                BEGIN
+                    INSERT INTO _picked VALUES (tx, ty);
+                    x := tx; y := ty;
+                    picked := picked + 1;
+                    RETURN NEXT;
+                EXCEPTION WHEN unique_violation THEN
+                    -- already used
+                END;
+            END LOOP;
+        END LOOP;
+    END LOOP;
 END;
 $$;
 
-/* --------------------------------------------------------------------
+/* ----------------------------------------------------------------
    Main simulation function
--------------------------------------------------------------------- */
+   (unchanged logic; now safe because helper never duplicates)
+----------------------------------------------------------------- */
 CREATE OR REPLACE FUNCTION simulate_tile_changes(
     p_zoom INT    DEFAULT 8,
     p_pct  FLOAT8 DEFAULT 0.05,
@@ -93,7 +202,11 @@ RETURNS TABLE (
     points_deleted    INT,
     points_inserted   INT,
     lines_updated     INT,
-    polygons_updated  INT
+    polygons_updated  INT,
+    bbox_min_x        INT,
+    bbox_min_y        INT,
+    bbox_max_x        INT,
+    bbox_max_y        INT
 )
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -115,31 +228,49 @@ DECLARE
     rand_buffer            FLOAT8;
     point_idx              INT;
     tile_margin            FLOAT8 := 50.0;
+    /* bbox tracking */
+    min_tile_x             INT := 999999;
+    min_tile_y             INT := 999999;
+    max_tile_x             INT := -1;
+    max_tile_y             INT := -1;
 BEGIN
     RAISE NOTICE 'Starting interactive tile simulation (% %% of tiles at zoom %) with seed %',
         ROUND((p_pct * 100)::NUMERIC, 1), p_zoom, p_seed;
 
-    FOR t IN SELECT * FROM pick_tiles_for_tick(p_zoom, p_pct, p_seed)
-    LOOP
+    /* ------------- MAIN LOOP over unique tiles ------------------- */
+    FOR t IN SELECT * FROM pick_tiles_for_tick(p_zoom, p_pct, p_seed) LOOP
         tile_count := tile_count + 1;
         env := ST_TileEnvelope(p_zoom, t.x, t.y);
-        tile_seed := p_seed + (t.x * 1000) + (t.y * 100000) + (p_zoom * 10000000) + floor(p_pct * 1000000);
 
-        -- Delete up to 2 points inside the tile
+        /* bbox update */
+        min_tile_x := LEAST(min_tile_x, t.x);
+        min_tile_y := LEAST(min_tile_y, t.y);
+        max_tile_x := GREATEST(max_tile_x, t.x);
+        max_tile_y := GREATEST(max_tile_y, t.y);
+
+        tile_seed := p_seed
+                     + (t.x * 1000)
+                     + (t.y * 100000)
+                     + (p_zoom * 10000000)
+                     + FLOOR(p_pct * 1000000);
+
+        /* --- POINTS: delete up to 2 -------------------------------- */
         WITH candidates AS (
             SELECT id FROM demo_points
             WHERE geom && env AND ST_Intersects(geom, env)
             ORDER BY id LIMIT 2
         ),
         deleted AS (
-            DELETE FROM demo_points dp USING candidates c
-            WHERE dp.id = c.id RETURNING dp.id
+            DELETE FROM demo_points dp
+            USING candidates c
+            WHERE dp.id = c.id
+            RETURNING dp.id
         )
         SELECT COUNT(*) INTO del_count FROM deleted;
 
         total_points_deleted := total_points_deleted + del_count;
 
-        -- Insert new points
+        /* --- POINTS: insert 2 -------------------------------------- */
         FOR point_idx IN 1..ins_per_tile LOOP
             rand_x1 := seeded_random(tile_seed + point_idx);
             rand_y1 := seeded_random(tile_seed + point_idx + 1000);
@@ -148,8 +279,10 @@ BEGIN
             VALUES (
                 ST_SetSRID(
                     ST_MakePoint(
-                        ST_XMin(env) + tile_margin + rand_x1 * (ST_XMax(env) - ST_XMin(env) - 2 * tile_margin),
-                        ST_YMin(env) + tile_margin + rand_y1 * (ST_YMax(env) - ST_YMin(env) - 2 * tile_margin)
+                        ST_XMin(env) + tile_margin
+                        + rand_x1 * (ST_XMax(env) - ST_XMin(env) - 2*tile_margin),
+                        ST_YMin(env) + tile_margin
+                        + rand_y1 * (ST_YMax(env) - ST_YMin(env) - 2*tile_margin)
                     ), 3857
                 ),
                 format('sim_%s_point_%s_%s_%s', p_seed, t.x, t.y, point_idx)
@@ -158,7 +291,7 @@ BEGIN
 
         total_points_inserted := total_points_inserted + ins_per_tile;
 
-        -- Update lines
+        /* --- LINES: translate -------------------------------------- */
         rand_translate_x := (seeded_random(tile_seed + 2000) - 0.5) * 0.5;
         rand_translate_y := (seeded_random(tile_seed + 3000) - 0.5) * 0.5;
 
@@ -166,21 +299,26 @@ BEGIN
             UPDATE demo_lines
             SET geom = ST_Translate(geom, rand_translate_x * 60, rand_translate_y * 60),
                 updated_at = now()
-            WHERE demo_tag = format('tile_%s_%s_line', t.x, t.y) AND geom && env
+            WHERE demo_tag = format('tile_%s_%s_line', t.x, t.y)
+              AND geom && env
             RETURNING id
         )
         SELECT COUNT(*) INTO upd_count FROM updated_lines;
 
         total_lines_updated := total_lines_updated + upd_count;
 
-        -- Update polygons
+        /* --- POLYGONS: buffer-jitter ------------------------------- */
         rand_buffer := (seeded_random(tile_seed + 4000) - 0.5) * 0.3;
 
         WITH updated_polygons AS (
             UPDATE demo_polygons
-            SET geom = ST_Buffer(ST_Centroid(geom), GREATEST(100, LEAST(160, 130 + rand_buffer * 60))),
+            SET geom = ST_Buffer(
+                           ST_Centroid(geom),
+                           GREATEST(100, LEAST(160, 130 + rand_buffer * 60))
+                       ),
                 updated_at = now()
-            WHERE demo_tag = format('tile_%s_%s_polygon', t.x, t.y) AND geom && env
+            WHERE demo_tag = format('tile_%s_%s_polygon', t.x, t.y)
+              AND geom && env
             RETURNING id
         )
         SELECT COUNT(*) INTO upd_count FROM updated_polygons;
@@ -188,15 +326,18 @@ BEGIN
         total_polygons_updated := total_polygons_updated + upd_count;
     END LOOP;
 
+    /* --------- summary out --------------------------------------- */
     selected_tiles    := tile_count;
     points_deleted    := total_points_deleted;
     points_inserted   := total_points_inserted;
     lines_updated     := total_lines_updated;
     polygons_updated  := total_polygons_updated;
+    bbox_min_x        := min_tile_x;
+    bbox_min_y        := min_tile_y;
+    bbox_max_x        := max_tile_x;
+    bbox_max_y        := max_tile_y;
 
-    /* --------------------------------------------------------------
-       Write to simulation_tiles & changed_tiles (unambiguous refs)
-    -------------------------------------------------------------- */
+    /* --------- meta tables & notify ------------------------------ */
     INSERT INTO simulation_tiles (z, x, y)
     SELECT p_zoom, pt.x, pt.y
     FROM   pick_tiles_for_tick(p_zoom, p_pct, p_seed) AS pt
@@ -204,18 +345,17 @@ BEGIN
 
     INSERT INTO changed_tiles (z, x, y, source_table, operation, changed_at, processed_at)
     SELECT p_zoom, pt.x, pt.y,
-           'simulation'::text, 'UPDATE'::text, NOW(), NULL
+           'simulation', 'UPDATE', NOW(), NULL
     FROM   pick_tiles_for_tick(p_zoom, p_pct, p_seed) AS pt
-    ON CONFLICT (z, x, y) DO UPDATE SET
-        changed_at   = EXCLUDED.changed_at,
-        source_table = EXCLUDED.source_table,
-        operation    = EXCLUDED.operation,
-        processed_at = NULL;
+    ON CONFLICT (z, x, y) DO UPDATE
+        SET changed_at   = EXCLUDED.changed_at,
+            source_table = EXCLUDED.source_table,
+            operation    = EXCLUDED.operation,
+            processed_at = NULL;
 
     NOTIFY tiles_updated;
     PERFORM pg_sleep(0.1);
 
-    RETURN NEXT;  -- returns the single summary row
-    RETURN;
+    RETURN NEXT;  -- single summary row
 END;
 $$;

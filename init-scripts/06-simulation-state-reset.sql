@@ -483,6 +483,21 @@ END;
 $$;
 
 -----------------------------------------------------------------------
+--  Function: reset_synthetic_demo()
+--  Simple function to reset demo data (called by initial data script)
+-----------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION reset_synthetic_demo()
+RETURNS VOID
+LANGUAGE plpgsql AS $$
+BEGIN
+    -- This function is called during initial data setup
+    -- For now, just ensure we have a clean state
+    PERFORM reset_simulation_state();
+    RAISE NOTICE 'Synthetic demo reset completed';
+END;
+$$;
+
+-----------------------------------------------------------------------
 --  Completion notice
 -----------------------------------------------------------------------
 SELECT 'Simulation state reset functionality installed successfully' AS status;
