@@ -58,13 +58,13 @@ $$;
 -----------------------------------------------------------------------
 DROP FUNCTION IF EXISTS get_simulation_pending_tiles(INT);        -- <<< remove legacy overload
 
+-- Function with single parameter that Rust code expects
 CREATE OR REPLACE FUNCTION get_simulation_pending_tiles(
-    _source      TEXT DEFAULT 'simulation',   -- ignored by SQL; needed by caller
     batch_limit  INT  DEFAULT 1000
 )
 RETURNS TABLE (z INT, x INT, y INT, count BIGINT)
 LANGUAGE sql STABLE PARALLEL SAFE AS $$
-    SELECT st.z, st.x, st.y, 1
+    SELECT st.z, st.x, st.y, 1::BIGINT
     FROM   simulation_tiles st
     WHERE  st.processed_at IS NULL
     ORDER  BY st.created_at
