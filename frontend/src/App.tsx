@@ -45,6 +45,10 @@ function App() {
     bbox_max_y: number
   } | null>(null)
   const [autoZoomTrigger, setAutoZoomTrigger] = useState(0)
+  // Real timing state
+  const [runStartTs, setRunStartTs] = useState<number | null>(null)
+  const [measuredSeconds, setMeasuredSeconds] = useState<number | null>(null)
+  const [extrapolatedSeconds, setExtrapolatedSeconds] = useState<number | null>(null)
   const lastBoundsRef = useRef<typeof lastSimulationBounds>(null)
 
   // Keep a ref to the latest bounds to avoid stale closures
@@ -101,6 +105,11 @@ function App() {
         if (completedCount >= 2) {
           // Simulation completed, refresh data and stop polling
           setIsSimulating(false)
+          // Capture elapsed time
+          const endTs = performance.now()
+          if (runStartTs != null) {
+            setMeasuredSeconds(Math.max(0, (endTs - runStartTs) / 1000))
+          }
           fetchData()
           setMapRefreshTrigger(Date.now())
           console.log('Simulation completed, data refreshed automatically')
@@ -120,11 +129,23 @@ function App() {
     return () => clearInterval(pollInterval)
   }, [isSimulating])
 
-  const formatTime = (freshCount: number) => {
-    const estimatedTime = Math.max(0.1, freshCount * 0.0006)
-    return estimatedTime < 1
-      ? `${(estimatedTime * 1000).toFixed(0)} ms`
-      : `${estimatedTime.toFixed(1)} s`
+  // Simple size estimate placeholder (until PMTiles writer reports real sizes)
+  const AVG_TILE_BYTES = 2048 // ~2 KB per tile payload, demo estimate
+
+  const formatSeconds = (seconds: number) => {
+    if (seconds < 1) return `${Math.max(0, seconds * 1000).toFixed(0)} ms`
+    if (seconds < 10) return `${seconds.toFixed(1)} s`
+    return `${seconds.toFixed(0)} s`
+  }
+
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`
+    const kb = bytes / 1024
+    if (kb < 1024) return `${kb.toFixed(1)} KB`
+    const mb = kb / 1024
+    if (mb < 1024) return `${mb.toFixed(1)} MB`
+    const gb = mb / 1024
+    return `${gb.toFixed(2)} GB`
   }
 
   const getEfficiencyRatio = () => {
@@ -141,11 +162,31 @@ function App() {
     return { timeRatio, dataRatio }
   }
 
-  const { timeRatio } = getEfficiencyRatio()
-  const processingTime = tileStatus ? formatTime(tileStatus.fresh_count) : '—'
+  // Keep the efficiency calculation around for future metrics, but don't bind unused vars
+  getEfficiencyRatio()
+  const totalTiles = (tileStatus?.fresh_count || 0) + (tileStatus?.stale_count || 0)
+  const freshTiles = tileStatus?.fresh_count || 0
+
+  // Speed (real measured vs extrapolated full run)
+  const speedProcessedLabel = measuredSeconds != null ? formatSeconds(measuredSeconds) : '—'
+  const speedFullLabel = extrapolatedSeconds != null ? formatSeconds(extrapolatedSeconds) : '—'
+
+  // Data size (processed vs full-run, rough estimate)
+  const processedBytes = freshTiles * AVG_TILE_BYTES
+  const fullRunBytes = totalTiles * AVG_TILE_BYTES
+  const sizeProcessedLabel = tileStatus ? formatBytes(processedBytes) : '—'
+  const sizeFullLabel = tileStatus ? formatBytes(fullRunBytes) : '—'
+
+  // Savings (cache hit / tiles skipped)
+  const tilesSkipped = tileStatus?.stale_count || 0
+  const cacheHitPct = totalTiles > 0 ? (tilesSkipped / totalTiles) * 100 : 0
 
   const runSimulation = async () => {
     setIsSimulating(true)
+    // Start timer for this run
+    setMeasuredSeconds(null)
+    setExtrapolatedSeconds(null)
+    setRunStartTs(performance.now())
     try {
       const response = await fetch('http://localhost:8080/api/simulate', {
         method: 'POST',
@@ -195,6 +236,17 @@ function App() {
     }
   }
 
+  // Compute extrapolated full-run time after we measure a run and receive updated counts
+  useEffect(() => {
+    if (measuredSeconds == null || !tileStatus) return
+    const total = (tileStatus.fresh_count || 0) + (tileStatus.stale_count || 0)
+    const fresh = tileStatus.fresh_count || 0
+    if (fresh > 0) {
+      const factor = total / fresh
+      setExtrapolatedSeconds(measuredSeconds * factor)
+    }
+  }, [tileStatus, measuredSeconds])
+
   return (
     /* ------------------------------------------------------------------ */
     /* OUTER WRAPPER with gradient + grain + content                      */
@@ -221,11 +273,11 @@ function App() {
           <div className="flex flex-col h-full">
             <div>
               <h1 className="text-4xl font-bold bg-gradient-to-r from-cyan-300 via-fuchsia-300 to-sky-300 bg-clip-text text-transparent mb-5">
-                Incremental Vector Tiles
+                JVT — Incremental Vector Tiles
               </h1>
               <p className="text-xl leading-relaxed mb-2">
-                A smarter way to render and deliver map tiles by processing only
-                the changes, not rebuilding everything from scratch.
+                PostGIS‑native tiler that regenerates only the tiles that changed.
+                Event‑driven, containerized, and unopinionated about delivery.
               </p>
             </div>
 
@@ -234,45 +286,40 @@ function App() {
               <div>
                 <h2 className="text-2xl font-semibold mb-5">How it works</h2>
                 <p className="leading-relaxed">
-                  Traditional tile generation rebuilds the entire tileset
-                  whenever data changes. JVT uses PostgreSQL triggers and
-                  LISTEN/NOTIFY to detect exactly which tiles need updates, then
-                  regenerates only those specific tiles.
+                  Database changes enqueue affected <code>z/x/y</code> tiles.
+                  A Rust worker listens via PostgreSQL <code>LISTEN/NOTIFY</code>,
+                  batches the queue, generates MVT with <code>ST_AsMVT</code>, and
+                  writes results to your chosen sink (PMTiles or ZXY). Each batch
+                  also emits a manifest so any pipeline can publish or cache as it prefers.
                 </p>
               </div>
 
               {/* Tech stack */}
               <div>
-                <h2 className="text-2xl font-semibold mb-5">
-                  The technology stack
-                </h2>
+                <h2 className="text-2xl font-semibold mb-5">The technology stack</h2>
                 <ul className="space-y-2">
                   <li className="flex items-center space-x-2">
                     <span className="w-2 h-2 bg-gradient-to-r from-rose-400 to-fuchsia-400 rounded-full" />
                     <span>
-                      <strong>PostGIS:</strong> Spatial database with change
-                      detection triggers
+                      <strong>PostGIS:</strong> change detection → tile queue
                     </span>
                   </li>
                   <li className="flex items-center space-x-2">
                     <span className="w-2 h-2 bg-gradient-to-r from-rose-400 to-fuchsia-400 rounded-full" />
                     <span>
-                      <strong>Rust:</strong> High-performance tile generation
-                      with zero-copy streaming
+                      <strong>Rust:</strong> event‑driven worker, bounded concurrency
                     </span>
                   </li>
                   <li className="flex items-center space-x-2">
                     <span className="w-2 h-2 bg-gradient-to-r from-rose-400 to-fuchsia-400 rounded-full" />
                     <span>
-                      <strong>MVT:</strong> Mapbox Vector Tiles for efficient
-                      geometry encoding
+                      <strong>MVT:</strong> tiles from <code>ST_AsMVT(…)</code>
                     </span>
                   </li>
                   <li className="flex items-center space-x-2">
                     <span className="w-2 h-2 bg-gradient-to-r from-rose-400 to-fuchsia-400 rounded-full" />
                     <span>
-                      <strong>PMTiles:</strong> Incremental archive format for
-                      efficient storage
+                      <strong>Outputs:</strong> PMTiles or ZXY + per‑batch manifest
                     </span>
                   </li>
                 </ul>
@@ -282,10 +329,9 @@ function App() {
               <div>
                 <h2 className="text-2xl font-semibold mb-5">Why it matters</h2>
                 <p className="leading-relaxed">
-                  For large-scale mapping applications, regenerating millions of
-                  tiles for small changes wastes computational resources and
-                  increases latency. JVT enables near-real-time map updates
-                  while dramatically reducing processing overhead.
+                  Stop nightly rebuilds. Update only what changed for lower compute,
+                  faster freshness (≈ 5‑minute cadence), and CDN‑friendly delivery.
+                  Works with object storage (on‑prem or cloud) or plain static hosting.
                 </p>
               </div>
 
@@ -293,11 +339,9 @@ function App() {
               <div className="mt-8 bg-white/5 backdrop-blur-sm border border-white/20 p-6 rounded-xl shadow-lg">
                 <h3 className="font-semibold mb-2">Live Demo</h3>
                 <p className="text-sm text-slate-300">
-                  The dashboard on the right shows a live simulation with
-                  synthetic data changes every 5 minutes. Green tiles are
-                  freshly regenerated, red tiles contain stale data. This
-                  demonstrates JVT’s ability to selectively update only changed
-                  areas.
+                  Run a simulation to enqueue a percentage of tiles. The map shows
+                  freshly updated tiles in green and stale tiles in red, illustrating
+                  how JVT regenerates only the affected areas.
                 </p>
               </div>
             </div>
@@ -315,25 +359,25 @@ function App() {
               </p>
             </div>
 
-            {/* Top metrics */}
+            {/* Top metrics – focused on three stats: Speed, Data size, Savings */}
             <div className="grid grid-cols-3 gap-4 mb-6">
-              <div className="bg-white/10 backdrop-blur-sm border border-cyan-300/20 rounded-xl p-4 text-center">
-                <div className="text-2xl font-bold bg-gradient-to-r from-cyan-300 to-cyan-100 bg-clip-text text-transparent">
-                  {timeRatio}x
-                </div>
-                <div className="text-slate-300 text-sm">faster processing</div>
+              {/* Speed */}
+              <div className="bg-white/10 backdrop-blur-sm border border-cyan-300/20 rounded-xl p-4">
+                <div className="text-xs uppercase tracking-wide text-cyan-200 mb-1">Speed</div>
+                <div className="text-2xl font-bold text-white">{speedProcessedLabel}</div>
+                <div className="text-[11px] text-slate-300 mt-1">Full run: {speedFullLabel}</div>
               </div>
-              <div className="bg-white/10 backdrop-blur-sm border border-fuchsia-300/20 rounded-xl p-4 text-center">
-                <div className="text-2xl font-bold text-white">
-                  {tileStatus?.fresh_count || 0}
-                </div>
-                <div className="text-slate-300 text-sm">tiles updated</div>
+              {/* Data size */}
+              <div className="bg-white/10 backdrop-blur-sm border border-fuchsia-300/20 rounded-xl p-4">
+                <div className="text-xs uppercase tracking-wide text-fuchsia-200 mb-1">Data size</div>
+                <div className="text-2xl font-bold text-white">{sizeProcessedLabel}</div>
+                <div className="text-[11px] text-slate-300 mt-1">Full run: {sizeFullLabel}</div>
               </div>
-              <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-4 text-center">
-                <div className="text-2xl font-bold text-white">
-                  {processingTime}
-                </div>
-                <div className="text-slate-300 text-sm">processing time</div>
+              {/* Savings */}
+              <div className="bg-white/10 backdrop-blur-sm border border-emerald-300/20 rounded-xl p-4">
+                <div className="text-xs uppercase tracking-wide text-emerald-200 mb-1">Savings</div>
+                <div className="text-2xl font-bold text-emerald-300">{cacheHitPct.toFixed(1)}%</div>
+                <div className="text-[11px] text-slate-300 mt-1">Tiles skipped: {tilesSkipped}</div>
               </div>
             </div>
 
@@ -426,41 +470,7 @@ function App() {
                 />
               </div>
             </div>
-
-            {/* Technical stats */}
-            <div className="grid grid-cols-2 gap-4 text-xs">
-              <div className="bg-white/10 backdrop-blur-sm border border-cyan-300/20 rounded-lg p-3">
-                <div className="text-cyan-200">Engine</div>
-                <div className="font-medium text-white">Rust + PostGIS</div>
-              </div>
-              <div className="bg-white/10 backdrop-blur-sm border border-fuchsia-300/20 rounded-lg p-3">
-                <div className="text-fuchsia-200">Update Cycle</div>
-                <div className="font-medium text-white">5 minutes</div>
-              </div>
-              <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg p-3">
-                <div className="text-slate-300">Total Tiles</div>
-                <div className="font-medium text-white">
-                  {(tileStatus?.fresh_count || 0) +
-                    (tileStatus?.stale_count || 0)}
-                </div>
-              </div>
-              <div className="bg-white/10 backdrop-blur-sm border border-emerald-300/20 rounded-lg p-3">
-                <div className="text-emerald-200">Efficiency</div>
-                <div className="font-medium text-emerald-300">
-                  {tileStatus &&
-                    tileStatus.fresh_count + tileStatus.stale_count > 0
-                    ? `${(
-                      (tileStatus.stale_count /
-                        (tileStatus.fresh_count + tileStatus.stale_count)) *
-                      100
-                    ).toFixed(1)}%`
-                    : '0%'}{' '}
-                  cache hit
-                </div>
-              </div>
-            </div>
           </div>
-          {/* ────────────────────────────────────────────────────────────────────── */}
         </div>
       </div>
     </div>

@@ -221,9 +221,6 @@ const Map: React.FC<MapProps> = ({ refreshTrigger, simulationBounds, autoZoomTri
     // Add navigation controls
     mapRef.current.addControl(new maplibregl.NavigationControl(), 'top-right')
 
-    // Add scale control
-    mapRef.current.addControl(new maplibregl.ScaleControl(), 'bottom-left')
-
     // Map event handlers
     mapRef.current.on('load', () => {
       console.log('Map loaded successfully')
