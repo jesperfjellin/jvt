@@ -56,4 +56,4 @@ Environment variables (see `.env` or `env.template`):
 - Neighbor tiles are expanded by a buffer to avoid edge artifacts.
 - Worker uses bounded concurrency and database timeouts; multi‑worker safety uses batch reads and deduplication at the queue.
 - Delivery is externalized: JVT writes artifacts and manifests; users publish via their own storage/CDN tooling.
-```
+
