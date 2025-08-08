@@ -276,7 +276,7 @@ function App() {
                 JVT — Incremental Vector Tiles
               </h1>
               <p className="text-xl leading-relaxed mb-2">
-                PostGIS‑native tiler that regenerates only the tiles that changed.
+                PostGIS‑native tiler built in Rust that regenerates only the tiles that changed.
                 Event‑driven, containerized, and unopinionated about delivery.
               </p>
             </div>
