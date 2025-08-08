@@ -1,92 +1,59 @@
-# JVT - Incremental Vector Tiles
+# JVT — Incremental Vector Tiles
 
-Live, low-latency vector tiles with database-driven change detection. Built with Rust, PostGIS, and PMTiles.
+PostGIS‑native, event‑driven vector tile pipeline that regenerates only the tiles that changed. Built with Rust, PostGIS, and MVT, with pluggable outputs (PMTiles or ZXY) and unopinionated delivery.
 
-## Quick Start
+## Quick start
 
-### 1. Setup Environment
+JVT assumes you have an existing PostGIS database. Point JVT at your database and select an output mode.
 
-Create a `.env` file:
+1) Configure environment:
 ```bash
 cp env.template .env
-# Edit .env and set POSTGRES_PASSWORD to a secure password
+# Set DATABASE_URL, GEOMETRY_SCHEMA/GEOMETRY_TABLES/GEOMETRY_COLUMN, OUTPUT_MODE
 ```
 
-### 2. Start Database
-
+2) Build and start JVT:
 ```bash
-# Start PostgreSQL with PostGIS
-docker-compose up postgres -d
-
-# Wait for database to be ready
-docker-compose logs -f postgres
+docker compose up --build -d
 ```
 
-### 3. Import Norway OSM Data
+## Architecture (high level)
 
-```bash
-# Download Norway OSM data first
-wget https://download.geofabrik.de/europe/norway-latest.osm.pbf -P /mnt/c/_data/GIS/osm/
+- **PostGIS**: geometry source of truth and change queue (`changed_tiles` with unique `(z,x,y)`).
+- **Change signaling**: `LISTEN/NOTIFY` wakes the worker; timeout poll is a fallback.
+- **Rust worker**: dequeues tiles in batches, generates MVT via `ST_AsMVT` (with `ST_AsMVTGeom`), and writes to the selected sink.
+- **Outputs**: single‑file PMTiles archive or ZXY files on disk; each batch also emits a manifest (for user‑defined upload/CDN pipelines).
+- **Frontend demo**: MapLibre dashboard to visualize updated vs stale tiles and show timing/efficiency.
 
-# Run the Norway import (takes 10-30 minutes)
-docker-compose run --rm jvt-worker /usr/local/bin/import_norway.sh
-```
+## Output modes
 
-### 4. Start the Worker
+JVT is unopinionated about delivery. Choose one at runtime via environment:
 
-```bash
-# Start the Rust tile worker
-docker-compose up jvt-worker -d
+- `OUTPUT_MODE=pmtiles` — write a single PMTiles file at `PMTILES_ARCHIVE_PATH` with atomic swap.
+- `OUTPUT_MODE=zxy` — write `{z}/{x}/{y}.mvt[.gz]` under `ZXY_OUTPUT_DIR` with atomic rename.
+- `OUTPUT_MODE=manifest` — emit NDJSON manifests of changed tiles to `MANIFEST_DIR` and stdout.
 
-# Monitor logs
-docker-compose logs -f jvt-worker
-```
+These artifacts fit any pipeline (rclone/awscli/rsync, internal CI/CD, S3/MinIO/Ceph, or simple web roots).
 
-### 5. Monitor the Pipeline
 
-The system automatically:
-- Creates initial global data on startup
-- Simulates data changes every 5 minutes
-- Processes tiles every 5 minutes when changes occur
+## Configuration
 
-```bash
-# Monitor logs
-docker-compose logs -f jvt-worker
-docker-compose logs -f jvt-data-simulator
-```
+Environment variables (see `.env` or `env.template`):
 
-## Architecture
+- `DATABASE_URL` — PostGIS URL
+- `GEOMETRY_SCHEMA`, `GEOMETRY_TABLES`, `GEOMETRY_COLUMN` — input geometry config
+- `OUTPUT_MODE` — `pmtiles` | `zxy` | `manifest`
+- `PMTILES_ARCHIVE_PATH` — path for PMTiles when in pmtiles mode
+- `ZXY_OUTPUT_DIR` — base directory for ZXY when in zxy mode
+- `MANIFEST_DIR` — directory for batch manifests
+- `TILES_MAX_Z`, `TILES_MIN_Z`, `TILE_SIZE`, `TILE_BUFFER` — tiling knobs
 
-- **PostGIS Database**: Stores synthetic global demo data with change detection triggers  
-- **Database Triggers**: Automatically detect changes and queue tiles for regeneration
-- **Rust Worker**: Processes tiles every 5 minutes and generates vector tiles
-- **Data Simulator**: Creates data changes every 5 minutes to demonstrate the pipeline
-- **PMTiles Archive**: Incremental tile storage that grows over time
 
-## Storage Layout
+## Design notes
 
-```
-jvt/
-├── logs/              # Application logs
-├── pmtiles_data/      # PMTiles archive (Docker volume)
-└── postgres_data/     # PostgreSQL data (Docker volume)
-```
-
-## Monitoring
-
-```bash
-# Database size
-docker-compose exec postgres psql -U postgres -d gis -c "
-SELECT pg_size_pretty(pg_database_size('gis'));"
-
-# Recent tile batches
-docker-compose exec postgres psql -U postgres -d gis -c "
-SELECT * FROM changed_tile_batches ORDER BY started_at DESC LIMIT 5;"
-
-# Pending tile changes
-docker-compose exec postgres psql -U postgres -d gis -c "
-SELECT z, x, y, count FROM get_pending_tiles() LIMIT 10;"
-
-# PMTiles archive stats
-docker-compose exec jvt-worker ls -lh /var/lib/pmtiles/
+- Tiles are generated per `z/x/y` by querying intersecting features within `ST_TileEnvelope` and encoding via `ST_AsMVT`.
+- JVT favors simple, class‑agnostic heuristics for low‑zoom: zoom‑scaled simplification and minimum length/area thresholds (configurable).
+- Neighbor tiles are expanded by a buffer to avoid edge artifacts.
+- Worker uses bounded concurrency and database timeouts; multi‑worker safety uses batch reads and deduplication at the queue.
+- Delivery is externalized: JVT writes artifacts and manifests; users publish via their own storage/CDN tooling.
 ```
