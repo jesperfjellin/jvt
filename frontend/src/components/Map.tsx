@@ -141,7 +141,7 @@ const Map: React.FC<MapProps> = ({ refreshTrigger, simulationBounds, autoZoomTri
       features: tileStatus.tiles.map(tileToGeoJSON)
     }
 
-    // Update or add the tile overlay source
+    // Update or add the tile overlay source 
     if (map.getSource('tile-overlay')) {
       (map.getSource('tile-overlay') as maplibregl.GeoJSONSource).setData(geojson)
     } else {
