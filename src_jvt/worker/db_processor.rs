@@ -55,7 +55,15 @@ impl DatabaseTileProcessor {
 
         // Process tiles in batches of 5000 for better efficiency while keeping memory usage reasonable
         let batch_size = 5000i32;
-        let query = "SELECT z, x, y, count FROM get_simulation_pending_tiles($1)";
+        // Core: read from changed_tiles; aggregate and return distinct z/x/y up to batch_size
+        let query = r#"
+            SELECT z, x, y, COUNT(*) AS count
+            FROM changed_tiles
+            WHERE processed_at IS NULL
+            GROUP BY z, x, y
+            ORDER BY MIN(changed_at) ASC
+            LIMIT $1
+        "#;
         let rows = self
             .database
             .query(query, &[&batch_size])
@@ -107,14 +115,11 @@ impl DatabaseTileProcessor {
 
         info!("Marking {} tiles as processed", batch.len());
 
-        // Mark tiles as processed by updating processed_at timestamp
+        // Mark tiles as processed by updating processed_at timestamp in changed_tiles
         for coord in &batch.tiles {
-            let query = "UPDATE simulation_tiles SET processed_at = NOW() WHERE z = $1 AND x = $2 AND y = $3";
+            let query = "UPDATE changed_tiles SET processed_at = NOW() WHERE z = $1 AND x = $2 AND y = $3 AND processed_at IS NULL";
             self.database
-                .execute(
-                    query,
-                    &[&(coord.z as i32), &(coord.x as i32), &(coord.y as i32)],
-                )
+                .execute(query, &[&(coord.z as i32), &(coord.x as i32), &(coord.y as i32)])
                 .await
                 .context("Failed to update tile processed_at timestamp")?;
         }
@@ -170,21 +175,7 @@ impl DatabaseTileProcessor {
         Ok(result)
     }
 
-    /// Reset tile status to baseline for next simulation
-    pub async fn reset_to_baseline(&self) -> Result<u64> {
-        info!("Resetting tile status to baseline for next simulation...");
-
-        // Clear all processed tiles to reset to baseline state
-        let reset_query = "DELETE FROM changed_tiles WHERE processed_at IS NOT NULL";
-        let reset_count = self.database.execute(reset_query, &[]).await?;
-
-        info!(
-            "Cleared {} processed tiles - system reset to baseline",
-            reset_count
-        );
-
-        Ok(reset_count)
-    }
+    // No simulation reset in core
 }
 
 #[derive(Debug)]

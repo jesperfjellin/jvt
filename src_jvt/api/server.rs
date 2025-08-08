@@ -164,10 +164,7 @@ impl ApiServer {
         let rows = match self.database.query(freshness_query, &[]).await {
             Ok(r) => r,
             Err(e) => {
-                error!(
-                    ?e,
-                    "Querying simulation_tiles failed; treating as 0 fresh tiles"
-                );
+                error!(?e, "Querying simulation_tiles failed; treating as 0 fresh tiles");
                 Vec::new()
             }
         };
@@ -430,13 +427,13 @@ async fn run_simulation(
     let session_id_str = session_id.unwrap();
     info!("Created simulation session: {}", session_id_str);
 
-    // Step 2: Clear simulation tiles for fresh start
-    let clear_simulation_query = "SELECT public.clear_simulation_tiles()";
-    if let Err(e) = api_server.database.query(clear_simulation_query, &[]).await {
-        error!("Failed to clear simulation tiles: {:#}", e);
-        return Err(StatusCode::INTERNAL_SERVER_ERROR);
-    }
-
+                // Step 2: Clear simulation tiles for fresh start
+        let clear_simulation_query = "SELECT public.clear_simulation_tiles()";
+        if let Err(e) = api_server.database.query(clear_simulation_query, &[]).await {
+            error!("Failed to clear simulation tiles: {:#}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    
     info!("Cleared simulation tiles for fresh start");
 
     // Step 3: Update session status to processing
@@ -462,7 +459,7 @@ async fn run_simulation(
                 error!("Simulation returned no results");
                 return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
-
+            
             // Get the actual counts from the simulation results
             let row = &rows[0];
             let selected_tiles: i32 = row.get(0);
@@ -477,15 +474,8 @@ async fn run_simulation(
 
             info!(
                 "Simulation completed successfully: {} tiles, {} points deleted, {} points inserted, {} lines updated, {} polygons updated, bbox: ({},{}) to ({},{})",
-                selected_tiles,
-                points_deleted,
-                points_inserted,
-                lines_updated,
-                polygons_updated,
-                bbox_min_x,
-                bbox_min_y,
-                bbox_max_x,
-                bbox_max_y
+                selected_tiles, points_deleted, points_inserted, lines_updated, polygons_updated,
+                bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y
             );
 
             // Step 5: Mark session as completed
